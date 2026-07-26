@@ -621,8 +621,17 @@ def task_detail(request, pk):
         elif request.user.role == User.ROLE_TRADIE:
             visible_quotes = [q for q in quotes if q.tradie == request.user]
 
+    # Who posted a job is only shown to local pros (who need it to decide
+    # whether to quote) and to the poster themselves — not to other clients
+    # or anonymous visitors browsing open tasks.
+    can_see_poster_identity = (
+        request.user.is_authenticated
+        and (request.user.role == User.ROLE_TRADIE or request.user == task.client)
+    )
+
     return render(request, 'marketplace/task_detail.html', {
         'task':            task,
+        'can_see_poster_identity': can_see_poster_identity,
         'quotes':          visible_quotes,
         'user_quote':      user_quote,
         'can_quote':       can_quote,

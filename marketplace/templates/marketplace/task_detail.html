@@ -368,6 +368,7 @@
 
       <div class="side-card">
         <h3>Posted by</h3>
+        {% if can_see_poster_identity %}
         <div class="poster-row">
           <div class="poster-av">👤</div>
           <div>
@@ -377,6 +378,9 @@
         </div>
         {% if can_message_client %}
           <a href="{% url 'conversation' task.pk task.client.pk %}" class="btn btn-outline-blue btn-sm" style="width:100%;text-align:center;">Message client</a>
+        {% endif %}
+        {% else %}
+        <p class="text-muted" style="font-size:.85rem;margin:0;">Only registered local professionals can see who posted this job.</p>
         {% endif %}
       </div>
 
