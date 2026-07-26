@@ -10,11 +10,10 @@
 .cat-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(128px,1fr));gap:8px;}
 .cat-chip{display:flex;align-items:center;gap:7px;padding:9px 12px;border:1.5px solid #cce4ef;border-radius:10px;cursor:pointer;font-size:.84rem;background:var(--white);transition:all .2s;}
 .cat-chip:hover,.cat-chip.sel{border-color:var(--blue);background:var(--blue-light);color:var(--blue);font-weight:600;}
-.multi-cat-grid ul{list-style:none;margin:0;padding:0;display:contents;}
-.multi-cat-grid li{display:contents;}
+.multi-cat-grid div{display:contents;}
 .multi-cat-grid label{display:flex;align-items:center;gap:7px;padding:9px 12px;border:1.5px solid #cce4ef;border-radius:10px;cursor:pointer;font-size:.84rem;background:var(--white);transition:all .2s;}
 .multi-cat-grid label:hover{border-color:var(--blue);}
-.multi-cat-grid li:has(input:checked) label{border-color:var(--blue);background:var(--blue-light);color:var(--blue);font-weight:600;}
+.multi-cat-grid label:has(input:checked){border-color:var(--blue);background:var(--blue-light);color:var(--blue);font-weight:600;}
 .multi-cat-grid input[type=checkbox]{accent-color:var(--blue);}
 .sidebar-card{background:var(--white);border-radius:16px;box-shadow:0 4px 18px rgba(0,80,120,.08);padding:20px;position:sticky;top:16px;}
 .sidebar-card h3{font-size:.94rem;color:var(--blue);margin:0 0 12px;}
