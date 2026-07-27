@@ -11,6 +11,7 @@ from django.db import DatabaseError
 from django.test import TestCase, override_settings
 from django.urls import reverse
 
+from .forms import ServiceAreaForm
 from .models import Invoice, InvoiceLine, Quote, Task, TradieProfile, User
 from .utils import send_invoice_notifications
 
@@ -429,3 +430,64 @@ class ClosedBetaAndApprovalFlowTests(TestCase):
             self.assertTrue(notification.body)
             self.assertEqual(notification.recipient, self.tradie_user)
         send_mail_mock.assert_called_once()
+
+
+class ServiceAreaFormTests(TestCase):
+    """Form-level only — avoids self.client GET (see other tests in this
+    file for the established pattern of only asserting on redirects, not
+    rendered template content, due to the pre-existing Python 3.14 test-
+    instrumentation issue documented in FUTURE_IMPLEMENTATION_STATUS.md)."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email='areatest@example.com', password='pass12345',
+            first_name='Area', last_name='Test', role=User.ROLE_TRADIE, town='Suva',
+        )
+        self.profile = TradieProfile.objects.create(user=self.user, trades=['cleaning'], service_towns=['Suva'])
+
+    def test_multiple_towns_is_valid_and_saves_as_a_list(self):
+        form = ServiceAreaForm({'service_towns': ['Suva', 'Nadi', 'Labasa']}, instance=self.profile)
+        self.assertTrue(form.is_valid())
+        form.save()
+        self.profile.refresh_from_db()
+        self.assertEqual(self.profile.service_towns, ['Suva', 'Nadi', 'Labasa'])
+
+    def test_no_towns_selected_is_invalid(self):
+        form = ServiceAreaForm({'service_towns': []}, instance=self.profile)
+        self.assertFalse(form.is_valid())
+        self.assertIn('service_towns', form.errors)
+
+
+class ServiceAreaViewTests(TestCase):
+    def setUp(self):
+        self.client_user = User.objects.create_user(
+            email='client-area@example.com', password='pass12345',
+            first_name='Client', last_name='User', role=User.ROLE_CLIENT, town='Suva',
+        )
+        self.tradie_user = User.objects.create_user(
+            email='tradie-area@example.com', password='pass12345',
+            first_name='Tradie', last_name='User', role=User.ROLE_TRADIE, town='Suva',
+        )
+        self.profile = TradieProfile.objects.create(user=self.tradie_user, trades=['cleaning'], service_towns=['Suva'])
+
+    def test_tradie_can_update_service_towns(self):
+        self.client.login(username=self.tradie_user.email, password='pass12345')
+        response = self.client.post(
+            reverse('edit_service_area'),
+            {'service_towns': ['Suva', 'Nadi']},
+            secure=True,
+        )
+        self.assertRedirects(response, reverse('tradie_dashboard'), fetch_redirect_response=False)
+        self.profile.refresh_from_db()
+        self.assertEqual(self.profile.service_towns, ['Suva', 'Nadi'])
+
+    def test_client_role_cannot_update_service_towns(self):
+        self.client.login(username=self.client_user.email, password='pass12345')
+        response = self.client.post(
+            reverse('edit_service_area'),
+            {'service_towns': ['Suva', 'Nadi']},
+            secure=True,
+        )
+        self.assertEqual(response.status_code, 403)
+        self.profile.refresh_from_db()
+        self.assertEqual(self.profile.service_towns, ['Suva'])

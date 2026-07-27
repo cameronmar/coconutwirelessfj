@@ -17,6 +17,7 @@ urlpatterns = [
     # Dashboards
     path('dashboard/client/',      views.client_dashboard, name='client_dashboard'),
     path('dashboard/tradie/',      views.tradie_dashboard, name='tradie_dashboard'),
+    path('dashboard/tradie/service-area/', views.edit_service_area, name='edit_service_area'),
     path('billing/',               views.billing,          name='billing'),
     # Tasks
     path('tasks/',                 views.browse_tasks,  name='browse_tasks'),

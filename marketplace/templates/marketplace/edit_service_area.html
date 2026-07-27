@@ -1,0 +1,39 @@
+{% extends "marketplace/base.html" %}
+{% block title %}Service Area – The Coconut Wireless Network{% endblock %}
+
+{% block extra_css %}
+<style>
+.settings-page{max-width:600px;margin:0 auto;padding:28px 20px 50px;}
+.page-title{font-size:1.4rem;font-weight:700;margin:0 0 4px;}
+.page-sub{color:var(--muted);font-size:.9rem;margin:0 0 22px;}
+.town-chips{display:flex;gap:8px;flex-wrap:wrap;}
+.town-chip{display:flex;align-items:center;gap:6px;padding:8px 14px;border:1.5px solid #cce4ef;border-radius:20px;font-size:.85rem;cursor:pointer;}
+.town-chip input{accent-color:var(--blue);}
+.town-chip:has(input:checked){border-color:var(--blue);background:var(--blue-light);color:var(--blue);font-weight:600;}
+.field-error{color:#c0392b;font-size:.82rem;margin-top:6px;}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="settings-page">
+  <div class="page-title">Service area</div>
+  <p class="page-sub">Select every town you're available to work in. Jobs posted in these towns show up on your dashboard and can trigger a job-match email if you've turned that on in <a href="{% url 'notification_settings' %}">Notification settings</a>.</p>
+
+  <div class="card">
+    <form method="post">
+      {% csrf_token %}
+      <div class="town-chips">
+        {% for value, label in town_choices %}
+        <label class="town-chip">
+          <input type="checkbox" name="service_towns" value="{{ value }}"
+            {% if value in form.service_towns.value %}checked{% endif %}>
+          {{ label }}
+        </label>
+        {% endfor %}
+      </div>
+      {% for e in form.service_towns.errors %}<div class="field-error">{{ e }}</div>{% endfor %}
+      <button type="submit" class="btn btn-primary" style="width:100%;margin-top:18px;">Save service area</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

@@ -48,6 +48,7 @@ footer{display:none;}
     <a href="{% url 'tradie_dashboard' %}" class="sb-link active"><span class="icon">🏠</span>Dashboard</a>
     <a href="{% url 'browse_tasks' %}" class="sb-link"><span class="icon">🔍</span>Find tasks</a>
     {% if user.pk %}<a href="{% url 'tradie_profile' user.pk %}" class="sb-link"><span class="icon">👤</span>My profile</a>{% endif %}
+    <a href="{% url 'edit_service_area' %}" class="sb-link"><span class="icon">📍</span>Service area</a>
     <div class="sb-lbl" style="margin-top:10px;">Hiring?</div>
     <a href="{% url 'post_task' %}" class="sb-link"><span class="icon">➕</span>Post a job</a>
     <div class="sb-lbl" style="margin-top:10px;">Account</div>

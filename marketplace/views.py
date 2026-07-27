@@ -39,6 +39,7 @@ from .forms import (
     PublicReviewForm,
     QuoteForm,
     QuotingAppointmentForm,
+    ServiceAreaForm,
     TaskForm,
     TradieRegistrationForm,
 )
@@ -412,6 +413,25 @@ def tradie_dashboard(request):
         'tradie_can_quote': tradie_can_quote,
     }
     return render(request, 'marketplace/tradie_dashboard.html', ctx)
+
+
+@login_required
+def edit_service_area(request):
+    _require_role(request, User.ROLE_TRADIE)
+    profile = _get_tradie_profile(request.user)
+    if not profile:
+        flash.warning(request, 'Your local professional profile could not be found. Please contact support.')
+        return redirect('tradie_dashboard')
+
+    form = ServiceAreaForm(request.POST or None, instance=profile)
+    if request.method == 'POST' and form.is_valid():
+        form.save()
+        flash.success(request, 'Your service area has been updated.')
+        return redirect('tradie_dashboard')
+    return render(request, 'marketplace/edit_service_area.html', {
+        'form': form,
+        'town_choices': TOWN_CHOICES,
+    })
 
 
 @login_required

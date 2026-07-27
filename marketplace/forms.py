@@ -161,6 +161,23 @@ class TradieRegistrationForm(forms.Form):
         return user
 
 
+class ServiceAreaForm(forms.ModelForm):
+    """Lets an already-registered local pro update the towns they service,
+    after signup — TradieRegistrationForm.service_towns only ever sets
+    this once, at registration."""
+    service_towns = forms.MultipleChoiceField(
+        choices=TOWN_CHOICES, widget=forms.CheckboxSelectMultiple,
+        label='Towns you service',
+    )
+
+    class Meta:
+        model = TradieProfile
+        fields = ['service_towns']
+
+    def clean_service_towns(self):
+        return list(self.cleaned_data['service_towns'])
+
+
 class LoginForm(forms.Form):
     email    = forms.EmailField(widget=_input('you@example.fj', type_='email'))
     password = forms.CharField(widget=forms.PasswordInput(attrs={'class': 'form-input', 'placeholder': 'Your password'}))
