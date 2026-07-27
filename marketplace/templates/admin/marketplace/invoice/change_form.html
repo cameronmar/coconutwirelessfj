@@ -3,10 +3,18 @@
 {% block object-tools-items %}
   {% if original and original.status != 'void' %}
   <li>
+    {% if original.status == 'draft' or original.status == 'overdue' %}
     <form method="post" action="{% url 'admin:marketplace_invoice_send' original.pk %}" style="display:inline;">
       {% csrf_token %}
       <button type="submit" class="default" style="margin:0;">Send Invoice</button>
     </form>
+    {% else %}
+    <form method="post" action="{% url 'admin:marketplace_invoice_send' original.pk %}" style="display:inline;" onsubmit="return confirm('This invoice was already sent. Resending will notify the provider again and create duplicate notification records — continue?');">
+      {% csrf_token %}
+      <input type="hidden" name="confirm_resend" value="1">
+      <button type="submit" style="margin:0;">Resend Invoice</button>
+    </form>
+    {% endif %}
   </li>
   <li>
     <form method="post" action="{% url 'admin:marketplace_invoice_void' original.pk %}" style="display:inline;" onsubmit="return confirm('Void this invoice? Linked platform fees will return to pending unless already paid.');">

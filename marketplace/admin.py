@@ -8,6 +8,7 @@ from decimal import Decimal
 from django import forms
 from django.contrib import admin, messages
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
+from django.core.exceptions import PermissionDenied
 from django.db import transaction
 from django.db.models import F, Q
 from django.db.models.functions import Greatest
@@ -75,6 +76,11 @@ class UserAdmin(BaseUserAdmin):
         }),
     )
 
+    def get_queryset(self, request):
+        # migrate_link()'s hasattr(obj, 'tradie_profile') check would
+        # otherwise run one query per row on this (the busiest) changelist.
+        return super().get_queryset(request).select_related('tradie_profile')
+
     def migrate_link(self, obj):
         from django.utils.html import format_html
         if obj.role == User.ROLE_CLIENT and not hasattr(obj, 'tradie_profile'):
@@ -97,6 +103,9 @@ class UserAdmin(BaseUserAdmin):
         as a fresh tradie registration), and the user is emailed telling them
         to log back in on the local pro side.
         """
+        if not (self.has_change_permission(request) and request.user.has_perm('marketplace.add_tradieprofile')):
+            raise PermissionDenied
+
         user = get_object_or_404(User, pk=pk)
         if user.role != User.ROLE_CLIENT:
             messages.error(request, f'{user} is not a client account.')
@@ -117,6 +126,8 @@ class UserAdmin(BaseUserAdmin):
 
             if not selected_trades:
                 messages.error(request, 'Select at least one trade.')
+            elif not selected_towns:
+                messages.error(request, 'Select at least one service town.')
             else:
                 with transaction.atomic():
                     user.role = User.ROLE_TRADIE
@@ -371,6 +382,7 @@ class TaskAdmin(admin.ModelAdmin):
 @admin.register(Quote)
 class QuoteAdmin(admin.ModelAdmin):
     list_display  = ['task', 'tradie', 'customer_facing_quote', 'quote_includes', 'status', 'include_platform_fee', 'created_at']
+    list_select_related = ['task', 'tradie']
     list_filter   = ['status', 'include_platform_fee', 'quote_includes', 'created_at']
     search_fields = ['task__title', 'tradie__email']
     raw_id_fields = ['task', 'tradie']
@@ -393,6 +405,7 @@ class QuoteAdmin(admin.ModelAdmin):
 @admin.register(QuotingAppointment)
 class QuotingAppointmentAdmin(admin.ModelAdmin):
     list_display = ['task', 'provider', 'client', 'status', 'selected_slot', 'created_at']
+    list_select_related = ['task', 'provider', 'client', 'selected_slot']
     list_filter = ['status', 'created_at']
     search_fields = ['task__title', 'provider__email', 'client__email']
     raw_id_fields = ['task', 'provider', 'client', 'selected_slot']
@@ -408,6 +421,7 @@ class QuotingAppointmentAdmin(admin.ModelAdmin):
 @admin.register(QuotingAppointmentSlot)
 class QuotingAppointmentSlotAdmin(admin.ModelAdmin):
     list_display = ['quoting_appointment', 'proposed_date', 'start_time', 'end_time', 'is_selected', 'created_at']
+    list_select_related = ['quoting_appointment']
     list_filter = ['is_selected', 'proposed_date', 'created_at']
     search_fields = ['quoting_appointment__task__title', 'quoting_appointment__provider__email']
     raw_id_fields = ['quoting_appointment']
@@ -420,6 +434,7 @@ class QuotingAppointmentSlotAdmin(admin.ModelAdmin):
 @admin.register(Message)
 class MessageAdmin(admin.ModelAdmin):
     list_display  = ['task', 'sender', 'recipient', 'created_at']
+    list_select_related = ['task', 'sender', 'recipient']
     search_fields = ['sender__email', 'recipient__email', 'body']
     raw_id_fields = ['task', 'sender', 'recipient']
     date_hierarchy = 'created_at'
@@ -445,6 +460,7 @@ class HasTaskFilter(admin.SimpleListFilter):
 @admin.register(PublicReview)
 class PublicReviewAdmin(admin.ModelAdmin):
     list_display  = ['ratee', 'rater', 'source_display', 'reliability_punctuality', 'timeline_schedule_delivery', 'service_quality_workmanship', 'overall_display', 'created_at']
+    list_select_related = ['ratee', 'rater', 'task']
     list_filter   = [HasTaskFilter, 'created_at']
     search_fields = ['rater__email', 'ratee__email', 'task__title', 'admin_note']
     raw_id_fields = ['task', 'rater', 'ratee']
@@ -516,6 +532,7 @@ class TradeCategoryAdmin(admin.ModelAdmin):
 @admin.register(TaskPhoto)
 class TaskPhotoAdmin(admin.ModelAdmin):
     list_display = ['task', 'caption', 'uploaded_at']
+    list_select_related = ['task']
     list_filter = ['uploaded_at']
     search_fields = ['task__title', 'caption']
     raw_id_fields = ['task']
@@ -566,6 +583,7 @@ class PromoCodeAdmin(admin.ModelAdmin):
 @admin.register(PlatformFee)
 class PlatformFeeAdmin(admin.ModelAdmin):
     list_display = ['task', 'tradie', 'final_job_value', 'gross_fee_amount', 'discount_amount', 'fee_amount', 'status', 'created_at']
+    list_select_related = ['task', 'tradie']
     list_filter = ['status', 'tradie', 'created_at']
     search_fields = ['task__title', 'tradie__email']
     raw_id_fields = ['task', 'tradie']
@@ -666,9 +684,11 @@ class InvoiceAdmin(admin.ModelAdmin):
     is_overdue_display.short_description = 'Overdue'
 
     def send_invoices_action(self, request, queryset):
+        sendable = queryset.filter(status__in=[Invoice.STATUS_DRAFT, Invoice.STATUS_OVERDUE])
+        skipped = queryset.count() - sendable.count()
         sent = 0
         email_failures = 0
-        for invoice in queryset.exclude(status=Invoice.STATUS_VOID):
+        for invoice in sendable:
             if not send_invoice_notifications(invoice):
                 email_failures += 1
             sent += 1
@@ -683,6 +703,13 @@ class InvoiceAdmin(admin.ModelAdmin):
                 )
         else:
             self.message_user(request, 'No invoices were sent.', level=messages.WARNING)
+        if skipped:
+            self.message_user(
+                request,
+                f'Skipped {skipped} invoice(s) that were already sent, paid, or void — '
+                f'use the invoice detail page if you really need to resend one.',
+                level=messages.WARNING,
+            )
     send_invoices_action.short_description = 'Send selected invoices to provider'
 
     def void_invoices_action(self, request, queryset):
@@ -705,9 +732,19 @@ class InvoiceAdmin(admin.ModelAdmin):
         return custom + super().get_urls()
 
     def send_invoice_view(self, request, object_id):
+        if not self.has_change_permission(request):
+            raise PermissionDenied
         invoice = get_object_or_404(Invoice, pk=object_id)
+        already_sent = invoice.status not in (Invoice.STATUS_DRAFT, Invoice.STATUS_OVERDUE)
         if invoice.status == Invoice.STATUS_VOID:
             messages.error(request, 'Cannot send a voided invoice.')
+        elif already_sent and request.POST.get('confirm_resend') != '1':
+            messages.warning(
+                request,
+                f'Invoice {invoice.invoice_number} was already sent (status: {invoice.get_status_display()}). '
+                f'Sending again will re-notify {invoice.tradie.full_name} and create duplicate notification '
+                f'records. If you really mean to resend it, use the "Resend anyway" link.',
+            )
         else:
             email_sent = send_invoice_notifications(invoice)
             messages.success(request, f'Invoice {invoice.invoice_number} sent to {invoice.tradie.full_name}.')
@@ -720,6 +757,8 @@ class InvoiceAdmin(admin.ModelAdmin):
         return redirect(reverse('admin:marketplace_invoice_change', args=[invoice.pk]))
 
     def void_invoice_view(self, request, object_id):
+        if not self.has_change_permission(request):
+            raise PermissionDenied
         invoice = get_object_or_404(Invoice, pk=object_id)
         if invoice.status != Invoice.STATUS_VOID:
             invoice.void()
@@ -727,6 +766,8 @@ class InvoiceAdmin(admin.ModelAdmin):
         return redirect(reverse('admin:marketplace_invoice_change', args=[invoice.pk]))
 
     def create_invoice_view(self, request):
+        if not self.has_add_permission(request):
+            raise PermissionDenied
         providers = User.objects.filter(role=User.ROLE_TRADIE).order_by('first_name', 'last_name')
         context = dict(
             self.admin_site.each_context(request),
@@ -795,6 +836,8 @@ class InvoiceAdmin(admin.ModelAdmin):
         return render(request, 'admin/marketplace/invoice/create_invoice.html', context)
 
     def weekly_invoices_view(self, request):
+        if not self.has_add_permission(request):
+            raise PermissionDenied
         context = dict(
             self.admin_site.each_context(request),
             title='Create Weekly Invoices',
@@ -852,6 +895,7 @@ class InvoiceAdmin(admin.ModelAdmin):
 @admin.register(InvoiceLine)
 class InvoiceLineAdmin(admin.ModelAdmin):
     list_display = ['invoice', 'line_type', 'description', 'amount']
+    list_select_related = ['invoice']
     list_filter = ['line_type', 'invoice__created_at']
     search_fields = ['invoice__invoice_number', 'description']
     raw_id_fields = ['invoice', 'platform_fee', 'task']
@@ -862,6 +906,7 @@ class InvoiceLineAdmin(admin.ModelAdmin):
 @admin.register(InvoiceNotification)
 class InvoiceNotificationAdmin(admin.ModelAdmin):
     list_display = ['invoice', 'recipient', 'channel', 'created_at']
+    list_select_related = ['invoice', 'recipient']
     list_filter = ['channel', 'created_at']
     search_fields = ['invoice__invoice_number', 'recipient__email']
     raw_id_fields = ['invoice', 'recipient']
@@ -925,7 +970,7 @@ class PlatformCircumventionCaseAdmin(admin.ModelAdmin):
     calculated_fee_display.short_description = 'Calculated fee (each party)'
 
     def _set_status(self, request, queryset, status, label):
-        updated = queryset.update(status=status)
+        updated = queryset.update(status=status, reviewed_by=request.user, reviewed_at=timezone.now())
         self.message_user(request, f'{updated} case(s) marked as {label}.')
 
     def mark_invoiced(self, request, queryset):
@@ -1071,6 +1116,7 @@ class MarketOrderInline(admin.TabularInline):
 @admin.register(MarketListing)
 class MarketListingAdmin(admin.ModelAdmin):
     list_display = ['title', 'seller', 'category', 'price_per_unit', 'units_remaining', 'units_available', 'use_founding_credit', 'status', 'order_mode', 'created_at']
+    list_select_related = ['seller']
     list_filter = ['status', 'order_mode', 'fulfillment_method', 'category', 'use_founding_credit']
     search_fields = ['title', 'seller__first_name', 'seller__last_name', 'seller__email']
     raw_id_fields = ['seller']
@@ -1085,6 +1131,7 @@ class MarketListingAdmin(admin.ModelAdmin):
 @admin.register(MarketOrder)
 class MarketOrderAdmin(admin.ModelAdmin):
     list_display = ['listing', 'buyer', 'quantity', 'total_price', 'platform_fee_amount', 'requested_date', 'status', 'fee_status', 'created_at']
+    list_select_related = ['listing', 'buyer']
     list_filter = ['status', 'fee_status', 'fulfillment_method']
     search_fields = ['listing__title', 'buyer__first_name', 'buyer__last_name', 'buyer__email']
     raw_id_fields = ['listing', 'buyer']

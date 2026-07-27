@@ -1,3 +1,4 @@
+import os
 from datetime import datetime
 from decimal import Decimal
 
@@ -7,7 +8,7 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 
 from .constants import TOWN_CHOICES, EXPERIENCE_CHOICES, FOUNDING_MEMBER_SLOTS, FOUNDING_MEMBER_CREDIT
-from .models import User, TradieProfile, Task, Quote, Message, TradeCategory, TaskPhoto, MarketListing, MarketOrder
+from .models import User, TradieProfile, Task, Quote, Message, TradeCategory, TaskPhoto, MarketListing, MarketOrder, PlatformSettings
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -18,6 +19,32 @@ def _input(placeholder='', type_='text', **kwargs):
 
 def _select(**kwargs):
     return forms.Select(attrs={'class': 'form-input', **kwargs})
+
+
+MAX_VERIFICATION_DOCUMENT_SIZE = 10 * 1024 * 1024  # 10MB — scans/photos of documents, not thumbnails
+ALLOWED_VERIFICATION_DOCUMENT_TYPES = {
+    'application/pdf': ('.pdf',),
+    'image/jpeg':       ('.jpg', '.jpeg'),
+    'image/png':        ('.png',),
+}
+
+
+def _clean_verification_document(file):
+    """Shared validation for tin_letter/business_licence/public_liability_
+    insurance/electrical_contractors_licence/plumber_licence — previously
+    these FileFields accepted any file of any size, unlike MarketListing's
+    clean_photo(). These are stored (S3 in production) and later linked to
+    directly from the Django admin, so an oversized upload is a storage-
+    cost concern and an unexpected file type is a content-safety concern."""
+    if not file:
+        return file
+    if hasattr(file, 'size') and file.size > MAX_VERIFICATION_DOCUMENT_SIZE:
+        raise ValidationError('File must be smaller than 10MB.')
+    ext = os.path.splitext(getattr(file, 'name', '') or '')[1].lower()
+    allowed_extensions = ALLOWED_VERIFICATION_DOCUMENT_TYPES.get(getattr(file, 'content_type', None))
+    if not allowed_extensions or ext not in allowed_extensions:
+        raise ValidationError('Only PDF, JPG, or PNG files are accepted.')
+    return file
 
 
 def _validate_closed_beta_email(email, gate_enabled):
@@ -92,7 +119,7 @@ class TradieRegistrationForm(forms.Form):
     trades           = forms.MultipleChoiceField(choices=[], widget=forms.CheckboxSelectMultiple)
     service_towns    = forms.MultipleChoiceField(choices=TOWN_CHOICES, widget=forms.CheckboxSelectMultiple)
     # Verification documents
-    tin_letter                    = forms.FileField(label='TIN Letter', help_text='Upload your FRCA TIN letter (PDF or image). Required.')
+    tin_letter                    = forms.FileField(label='TIN Letter', help_text='Upload your FRCA TIN letter (PDF, JPG, or PNG, up to 10MB). Required.')
     business_licence              = forms.FileField(label='Business Licence', required=False, help_text='Optional.')
     public_liability_insurance    = forms.FileField(label='Public Liability Insurance', required=False, help_text='Optional.')
     electrical_contractors_licence = forms.FileField(label='Electrical Contractors Licence', required=False, help_text="Electrical work is safety-critical — upload this now if you have it. If not, you can still register, but your account won't be able to bid on jobs until our team has reviewed it.")
@@ -122,6 +149,21 @@ class TradieRegistrationForm(forms.Form):
         _validate_closed_beta_email(email, settings.BETA_GATE_TRADIE_SIGNUPS)
         return email
 
+    def clean_tin_letter(self):
+        return _clean_verification_document(self.cleaned_data.get('tin_letter'))
+
+    def clean_business_licence(self):
+        return _clean_verification_document(self.cleaned_data.get('business_licence'))
+
+    def clean_public_liability_insurance(self):
+        return _clean_verification_document(self.cleaned_data.get('public_liability_insurance'))
+
+    def clean_electrical_contractors_licence(self):
+        return _clean_verification_document(self.cleaned_data.get('electrical_contractors_licence'))
+
+    def clean_plumber_licence(self):
+        return _clean_verification_document(self.cleaned_data.get('plumber_licence'))
+
     def clean(self):
         cd = super().clean()
         p1, p2 = cd.get('password'), cd.get('password_confirm')
@@ -141,6 +183,12 @@ class TradieRegistrationForm(forms.Form):
                 town=cd['town'],
                 role=User.ROLE_TRADIE,
             )
+            # Lock the (singleton) PlatformSettings row as a mutex so
+            # concurrent registrations can't all read the same pre-commit
+            # TradieProfile count and all slip in under FOUNDING_MEMBER_SLOTS
+            # — select_for_update() on one shared row serializes callers
+            # without needing a dedicated counter table.
+            PlatformSettings.objects.select_for_update().filter(pk=PlatformSettings.get_active().pk).exists()
             is_founder = TradieProfile.objects.count() < FOUNDING_MEMBER_SLOTS
             profile = TradieProfile(
                 user=user,
@@ -198,6 +246,34 @@ class SetNewPasswordForm(forms.Form):
             raise ValidationError('Passwords do not match.')
         if p1 and len(p1) < 8:
             raise ValidationError('Password must be at least 8 characters.')
+        return cd
+
+
+class ChangePasswordForm(forms.Form):
+    """For an already-logged-in user changing their password by choice —
+    distinct from SetNewPasswordForm, which is for the locked-out reset
+    flow and has no current-password field to check."""
+    current_password = forms.CharField(label='Current password', widget=forms.PasswordInput(attrs={'class': 'form-input', 'placeholder': 'Your current password'}))
+    new_password         = forms.CharField(label='New password', widget=forms.PasswordInput(attrs={'class': 'form-input', 'placeholder': 'At least 8 characters'}))
+    new_password_confirm = forms.CharField(label='Confirm new password', widget=forms.PasswordInput(attrs={'class': 'form-input', 'placeholder': 'Repeat new password'}))
+
+    def __init__(self, *args, user=None, **kwargs):
+        self.user = user
+        super().__init__(*args, **kwargs)
+
+    def clean_current_password(self):
+        current = self.cleaned_data['current_password']
+        if not self.user or not self.user.check_password(current):
+            raise ValidationError('Your current password is incorrect.')
+        return current
+
+    def clean(self):
+        cd = super().clean()
+        p1, p2 = cd.get('new_password'), cd.get('new_password_confirm')
+        if p1 and p2 and p1 != p2:
+            raise ValidationError('New passwords do not match.')
+        if p1 and len(p1) < 8:
+            raise ValidationError('New password must be at least 8 characters.')
         return cd
 
 
@@ -264,6 +340,13 @@ class TaskPhotoForm(forms.ModelForm):
             'image':   forms.FileInput(attrs={'class': 'form-input', 'accept': 'image/*'}),
             'caption': forms.TextInput(attrs={'class': 'form-input', 'placeholder': 'e.g. Kitchen tap close-up'}),
         }
+
+    def clean_image(self):
+        image = self.cleaned_data.get('image')
+        max_bytes = 5 * 1024 * 1024
+        if image and hasattr(image, 'size') and image.size > max_bytes:
+            raise ValidationError('Photo must be smaller than 5MB.')
+        return image
 
 
 # ── Quote form ────────────────────────────────────────────────────────────────

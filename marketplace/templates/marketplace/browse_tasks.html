@@ -104,7 +104,7 @@
             <div class="tc-meta">
               <span>📍 {{ task.town }}</span>
               {% if task.preferred_date %}<span>📅 {{ task.preferred_date }}</span>{% endif %}
-              <span>💬 {{ task.quote_count }} quote{{ task.quote_count|pluralize }}</span>
+              <span>💬 {{ task.quote_count_annotated }} quote{{ task.quote_count_annotated|pluralize }}</span>
               <span>🕐 {{ task.created_at|timesince }} ago</span>
             </div>
             {% if task.materials_responsibility or task.on_site_inspection_required %}
@@ -132,6 +132,7 @@
         </div>
         {% endfor %}
       </div>
+      {% include "marketplace/_pagination.html" %}
     </div>
   </div>
 </div>

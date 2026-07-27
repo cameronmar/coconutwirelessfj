@@ -10,14 +10,19 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import DatabaseError
 from django.test import TestCase, override_settings
 from django.urls import reverse
+from django.utils import timezone as django_timezone
 
-from .forms import MarketOrderForm, ServiceAreaForm
+from .forms import ChangePasswordForm, MarketOrderForm, ServiceAreaForm
 from .models import (
     Invoice,
     InvoiceLine,
     MarketListing,
     MarketOrder,
     Message,
+    PlatformCircumventionCase,
+    PlatformFee,
+    PlatformSettings,
+    PromoCode,
     Quote,
     QuotingAppointment,
     QuotingAppointmentSlot,
@@ -25,7 +30,7 @@ from .models import (
     TradieProfile,
     User,
 )
-from .utils import send_invoice_notifications
+from .utils import calculate_platform_fee, create_platform_fee_for_task, send_invoice_notifications
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -969,3 +974,521 @@ class TaskCategoryRequiredTests(TestCase):
         )
         self.assertEqual(response.status_code, 302)
         self.assertTrue(Task.objects.filter(title='Fix sink', category='plumbing').exists())
+
+
+class PlatformFeeCalculationTests(TestCase):
+    """calculate_platform_fee(): quantization to cents + negative-value guard."""
+
+    def setUp(self):
+        self.settings_obj = PlatformSettings.objects.create(
+            success_fee_rate=Decimal('7.5'), success_fee_cap=Decimal('75.00'),
+            large_job_threshold=Decimal('5000.00'), large_job_fee_rate=Decimal('3.00'), active=True,
+        )
+
+    def test_fee_is_quantized_to_cents(self):
+        _, _, fee = calculate_platform_fee(Decimal('100.33'), self.settings_obj)
+        self.assertEqual(fee, fee.quantize(Decimal('0.01')))
+        self.assertEqual(fee, Decimal('7.52'))
+
+    def test_negative_job_value_never_produces_a_negative_fee(self):
+        _, _, fee = calculate_platform_fee(Decimal('-500.00'), self.settings_obj)
+        self.assertEqual(fee, Decimal('0.00'))
+
+
+class PlatformSettingsSingletonTests(TestCase):
+    def test_activating_a_row_deactivates_all_others(self):
+        first = PlatformSettings.objects.create(active=True)
+        second = PlatformSettings.objects.create(active=False)
+        second.active = True
+        second.save()
+        first.refresh_from_db()
+        self.assertFalse(first.active)
+        self.assertTrue(second.active)
+        self.assertEqual(PlatformSettings.objects.filter(active=True).count(), 1)
+
+
+class FoundingCreditAndPromoRaceGuardTests(TestCase):
+    """Not true concurrency tests (that needs multiple DB connections/
+    threads and is out of scope for the unit test suite) — these confirm
+    the now-locked code paths still behave correctly for the ordinary,
+    single-request case, i.e. the select_for_update()/F() changes didn't
+    break normal behaviour."""
+
+    def setUp(self):
+        self.settings_obj = PlatformSettings.objects.create(
+            success_fee_rate=Decimal('10.0'), success_fee_cap=Decimal('1000.00'),
+            large_job_threshold=Decimal('5000.00'), large_job_fee_rate=Decimal('3.00'), active=True,
+        )
+        self.client_user = User.objects.create_user(
+            email='race-client@example.com', password='pass12345',
+            first_name='Client', last_name='User', role=User.ROLE_CLIENT, town='Suva',
+        )
+        self.tradie_user = User.objects.create_user(
+            email='race-tradie@example.com', password='pass12345',
+            first_name='Tradie', last_name='User', role=User.ROLE_TRADIE, town='Suva',
+        )
+        self.profile = TradieProfile.objects.create(
+            user=self.tradie_user, trades=['cleaning'], service_towns=['Suva'],
+            verification_status=TradieProfile.VERIFICATION_APPROVED,
+            is_founding_member=True, founding_member_credit_balance=Decimal('50.00'),
+        )
+        self.task = Task.objects.create(
+            client=self.client_user, title='Fix sink', category='plumbing',
+            description='Kitchen sink leaking', budget=Decimal('150.00'), town='Suva',
+            status=Task.STATUS_COMPLETED, assigned_tradie=self.tradie_user,
+            final_job_value=Decimal('200.00'), completed_at=django_timezone.now(),
+        )
+        self.quote = Quote.objects.create(
+            task=self.task, tradie=self.tradie_user, price=Decimal('200.00'),
+            message='ok', status=Quote.STATUS_ACCEPTED, used_founding_credit=True,
+        )
+
+    def test_founding_credit_is_capped_and_deducted_once(self):
+        fee = create_platform_fee_for_task(self.task, Decimal('200.00'))
+        self.assertEqual(fee.discount_amount, Decimal('20.00'))  # 10% of 200 = 20, balance covers it
+        self.profile.refresh_from_db()
+        self.assertEqual(self.profile.founding_member_credit_balance, Decimal('30.00'))
+
+    def test_discount_never_exceeds_the_gross_fee(self):
+        self.profile.founding_member_credit_balance = Decimal('500.00')
+        self.profile.save()
+        fee = create_platform_fee_for_task(self.task, Decimal('200.00'))
+        self.assertEqual(fee.discount_amount, fee.gross_fee_amount)
+        self.assertEqual(fee.fee_amount, Decimal('0.00'))
+
+    def test_promo_code_times_used_increments_and_respects_max_uses(self):
+        promo = PromoCode.objects.create(
+            code='SAVE10', discount_type=PromoCode.DISCOUNT_PERCENT, discount_value=Decimal('50'),
+            active=True, max_uses=1, times_used=0,
+        )
+        self.quote.used_founding_credit = False
+        self.quote.promo_code = promo
+        self.quote.save()
+
+        fee = create_platform_fee_for_task(self.task, Decimal('200.00'))
+        promo.refresh_from_db()
+        self.assertEqual(promo.times_used, 1)
+        self.assertGreater(fee.discount_amount, Decimal('0.00'))
+
+    def test_exhausted_promo_code_grants_no_discount(self):
+        promo = PromoCode.objects.create(
+            code='USEDUP', discount_type=PromoCode.DISCOUNT_PERCENT, discount_value=Decimal('50'),
+            active=True, max_uses=1, times_used=1,
+        )
+        self.quote.used_founding_credit = False
+        self.quote.promo_code = promo
+        self.quote.save()
+
+        fee = create_platform_fee_for_task(self.task, Decimal('200.00'))
+        self.assertEqual(fee.discount_amount, Decimal('0.00'))
+
+
+class DoubleInvoicingGuardTests(TestCase):
+    def setUp(self):
+        self.settings_obj = PlatformSettings.objects.create(active=True)
+        self.client_user = User.objects.create_user(
+            email='inv-client@example.com', password='pass12345',
+            first_name='Client', last_name='User', role=User.ROLE_CLIENT, town='Suva',
+        )
+        self.tradie_user = User.objects.create_user(
+            email='inv-tradie@example.com', password='pass12345',
+            first_name='Tradie', last_name='User', role=User.ROLE_TRADIE, town='Suva',
+        )
+        TradieProfile.objects.create(user=self.tradie_user, trades=['cleaning'], service_towns=['Suva'])
+        self.task = Task.objects.create(
+            client=self.client_user, title='Fix sink', category='plumbing',
+            description='Leak', budget=Decimal('150.00'), town='Suva',
+            status=Task.STATUS_COMPLETED, assigned_tradie=self.tradie_user,
+            final_job_value=Decimal('150.00'), completed_at=django_timezone.now(),
+        )
+        self.fee = PlatformFee.objects.create(
+            task=self.task, tradie=self.tradie_user, final_job_value=Decimal('150.00'),
+            fee_rate=Decimal('7.5'), fee_cap=Decimal('75.00'), gross_fee_amount=Decimal('11.25'),
+            fee_amount=Decimal('11.25'), status=PlatformFee.STATUS_PENDING,
+        )
+
+    def test_an_already_invoiced_fee_is_not_billed_a_second_time(self):
+        from .utils import create_invoice_with_lines
+        first_invoice = create_invoice_with_lines(
+            tradie=self.tradie_user, period_start=django_timezone.localdate(), period_end=django_timezone.localdate(),
+            fee_ids=[self.fee.pk],
+        )
+        self.assertEqual(first_invoice.lines.count(), 1)
+        self.fee.refresh_from_db()
+        self.assertEqual(self.fee.status, PlatformFee.STATUS_INVOICED)
+
+        second_invoice = create_invoice_with_lines(
+            tradie=self.tradie_user, period_start=django_timezone.localdate(), period_end=django_timezone.localdate(),
+            fee_ids=[self.fee.pk],
+        )
+        self.assertEqual(second_invoice.lines.count(), 0)
+        self.assertEqual(second_invoice.total_amount, Decimal('0.00'))
+
+
+class QuoteVatTakeHomeTests(TestCase):
+    """The estimated_provider_take_home saved on submit must match what the
+    live JS calculator on task_detail.html shows — previously the server
+    ignored VAT entirely."""
+
+    def setUp(self):
+        PlatformSettings.objects.create(
+            success_fee_rate=Decimal('7.5'), success_fee_cap=Decimal('1000.00'),
+            large_job_threshold=Decimal('5000.00'), large_job_fee_rate=Decimal('3.00'), active=True,
+        )
+        self.client_user = User.objects.create_user(
+            email='vat-client@example.com', password='pass12345',
+            first_name='Client', last_name='User', role=User.ROLE_CLIENT, town='Suva',
+        )
+        self.tradie_user = User.objects.create_user(
+            email='vat-tradie@example.com', password='pass12345',
+            first_name='Tradie', last_name='User', role=User.ROLE_TRADIE, town='Suva',
+        )
+        TradieProfile.objects.create(
+            user=self.tradie_user, trades=['cleaning'], service_towns=['Suva'],
+            verification_status=TradieProfile.VERIFICATION_APPROVED,
+        )
+        self.task = Task.objects.create(
+            client=self.client_user, title='Fix sink', category='plumbing',
+            description='Leak', budget=Decimal('150.00'), town='Suva',
+        )
+
+    def test_take_home_deducts_vat_after_the_platform_fee(self):
+        self.client.login(username=self.tradie_user.email, password='pass12345')
+        response = self.client.post(
+            reverse('submit_quote', args=[self.task.pk]),
+            {
+                'price': '115.00', 'message': 'Can do', 'quote_includes': 'labour_only',
+                'vat_applicable': 'on', 'vat_rate': '15',
+            },
+            secure=True,
+        )
+        self.assertEqual(response.status_code, 302)
+        quote = Quote.objects.get(task=self.task, tradie=self.tradie_user)
+        # fee = 7.5% of 115 = 8.625 -> quantized 8.62 (estimated_platform_fee
+        # is quantized independently in submit_quote); after_fee = 115 - 8.62
+        # = 106.38; take_home = 106.38 * 0.85 = 90.423 -> 90.42
+        self.assertEqual(quote.estimated_platform_fee, Decimal('8.62'))
+        after_fee = Decimal('115.00') - quote.estimated_platform_fee
+        expected = (after_fee * Decimal('0.85')).quantize(Decimal('0.01'))
+        self.assertEqual(quote.estimated_provider_take_home, expected)
+        self.assertLess(quote.estimated_provider_take_home, after_fee)
+
+    def test_no_vat_leaves_take_home_unchanged(self):
+        self.client.login(username=self.tradie_user.email, password='pass12345')
+        response = self.client.post(
+            reverse('submit_quote', args=[self.task.pk]),
+            {'price': '100.00', 'message': 'Can do', 'quote_includes': 'labour_only'},
+            secure=True,
+        )
+        self.assertEqual(response.status_code, 302)
+        quote = Quote.objects.get(task=self.task, tradie=self.tradie_user)
+        self.assertEqual(quote.estimated_provider_take_home, Decimal('100.00') - quote.estimated_platform_fee)
+
+
+class VerificationDocumentUploadValidationTests(TestCase):
+    def _base_post_data(self):
+        return {
+            'first_name': 'Doc', 'last_name': 'Test', 'email': 'doctest@example.com',
+            'mobile': '+679 111 2222', 'town': 'Suva', 'password': 'pass12345', 'password_confirm': 'pass12345',
+            'business_name': '', 'tin': '', 'years_experience': '1-3 years', 'bio': 'Bio',
+            'trades': ['cleaning'], 'service_towns': ['Suva'],
+            'accepted_terms': 'on', 'accepted_platform_circumvention': 'on', 'accepted_invoicing_terms': 'on',
+        }
+
+    def test_oversized_document_is_rejected(self):
+        from .forms import TradieRegistrationForm
+        big_file = SimpleUploadedFile('tin.pdf', b'x' * (11 * 1024 * 1024), content_type='application/pdf')
+        form = TradieRegistrationForm(data=self._base_post_data(), files={'tin_letter': big_file})
+        self.assertFalse(form.is_valid())
+        self.assertIn('tin_letter', form.errors)
+
+    def test_disallowed_file_type_is_rejected(self):
+        from .forms import TradieRegistrationForm
+        bad_file = SimpleUploadedFile('tin.exe', b'not really a pdf', content_type='application/octet-stream')
+        form = TradieRegistrationForm(data=self._base_post_data(), files={'tin_letter': bad_file})
+        self.assertFalse(form.is_valid())
+        self.assertIn('tin_letter', form.errors)
+
+    def test_valid_pdf_is_accepted(self):
+        from .forms import TradieRegistrationForm
+        good_file = SimpleUploadedFile('tin.pdf', b'%PDF-1.4 fake pdf content', content_type='application/pdf')
+        form = TradieRegistrationForm(data=self._base_post_data(), files={'tin_letter': good_file})
+        self.assertNotIn('tin_letter', form.errors)
+
+
+class RateLimitingTests(TestCase):
+    """login_view's failure/blocked paths both end in render(login.html),
+    which crashes under this local environment's Python 3.14 test-
+    instrumentation issue (see other tests in this file) — so the login
+    tests seed the rate-limit cache key directly (rather than actually
+    POSTing wrong passwords repeatedly) and call the view via
+    RequestFactory with render() mocked out, inspecting cache/session
+    state instead of the rendered response."""
+
+    def setUp(self):
+        from django.core.cache import cache
+        cache.clear()
+        self.user = User.objects.create_user(
+            email='ratelimit@example.com', password='CorrectPass123',
+            first_name='Rate', last_name='Limit', role=User.ROLE_CLIENT, town='Suva',
+        )
+
+    def test_login_locks_out_after_repeated_failures(self):
+        from django.core.cache import cache
+        from django.contrib.auth.models import AnonymousUser
+        from django.test import RequestFactory
+        from unittest.mock import patch
+        from . import views as marketplace_views
+
+        cache.set(f'ratelimit:login:127.0.0.1', 10, 900)
+        request = RequestFactory().post('/login/', {'email': self.user.email, 'password': 'CorrectPass123'})
+        request.user = AnonymousUser()
+        from django.contrib.messages.storage.fallback import FallbackStorage
+        setattr(request, 'session', {})
+        setattr(request, '_messages', FallbackStorage(request))
+        with patch('marketplace.views.render') as mock_render:
+            mock_render.return_value = None
+            marketplace_views.login_view(request)
+        # Blocked before authenticate() ever ran — no session key was ever
+        # touched because login() was never called.
+        self.assertTrue(mock_render.called)
+
+    def test_successful_login_does_not_count_against_the_limit(self):
+        # Simulate 3 prior failed attempts (below the 10-attempt threshold)
+        # by seeding the cache directly, then confirm a correct-password
+        # login still succeeds normally.
+        from django.core.cache import cache
+        cache.set('ratelimit:login:127.0.0.1', 3, 900)
+        response = self.client.post(reverse('login'), {'email': self.user.email, 'password': 'CorrectPass123'}, secure=True)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('_auth_user_id', self.client.session)
+        # A successful login clears the counter entirely.
+        self.assertIsNone(cache.get('ratelimit:login:127.0.0.1'))
+
+    def test_contact_support_is_rate_limited(self):
+        from unittest.mock import patch
+        data = {'name': 'A', 'email': 'a@example.com', 'topic': 'general', 'subject': 'Hi', 'message': 'Hello there'}
+        with patch('marketplace.views.notify_admin') as mock_notify:
+            for _ in range(5):
+                self.client.post(reverse('contact_support'), data, secure=True)
+            self.assertEqual(mock_notify.call_count, 5)
+            self.client.post(reverse('contact_support'), data, secure=True)
+            # 6th request is blocked before notify_admin is ever called again.
+            self.assertEqual(mock_notify.call_count, 5)
+
+    def test_password_reset_request_is_rate_limited(self):
+        from django.core import mail
+        for _ in range(5):
+            self.client.post(reverse('password_reset_request'), {'email': self.user.email}, secure=True)
+        mail.outbox.clear()
+        self.client.post(reverse('password_reset_request'), {'email': self.user.email}, secure=True)
+        self.assertEqual(len(mail.outbox), 0)
+
+
+class PaginationTests(TestCase):
+    """Rendering browse_tasks.html/browse_tradies.html/market_browse.html
+    via self.client crashes under this local environment's Python 3.14
+    test-instrumentation issue (see other tests in this file for the same,
+    pre-existing limitation) — these call the view functions directly and
+    inspect the Paginator object placed in the returned context instead of
+    the rendered HTML."""
+
+    def test_browse_tasks_paginates_at_20(self):
+        from django.test import RequestFactory
+        client_user = User.objects.create_user(
+            email='page-client@example.com', password='pass12345',
+            first_name='Page', last_name='Client', role=User.ROLE_CLIENT, town='Suva',
+        )
+        for i in range(25):
+            Task.objects.create(
+                client=client_user, title=f'Task {i}', category='cleaning',
+                description='desc', budget=Decimal('50.00'), town='Suva',
+            )
+        from unittest.mock import patch
+        request = RequestFactory().get('/tasks/')
+        request.user = client_user
+        with patch('marketplace.views.render') as mock_render:
+            mock_render.return_value = None
+            from . import views as marketplace_views
+            marketplace_views.browse_tasks(request)
+            ctx = mock_render.call_args[0][2]
+        self.assertEqual(ctx['page_obj'].paginator.num_pages, 2)
+        self.assertEqual(len(ctx['page_obj'].object_list), 20)
+
+
+class CircumventionCaseAuditFieldsTests(TestCase):
+    def setUp(self):
+        self.admin_user = User.objects.create_superuser(email='super@example.com', password='pass12345')
+        self.client_user = User.objects.create_user(
+            email='circ-client@example.com', password='pass12345',
+            first_name='Client', last_name='User', role=User.ROLE_CLIENT, town='Suva',
+        )
+        self.tradie_user = User.objects.create_user(
+            email='circ-tradie@example.com', password='pass12345',
+            first_name='Tradie', last_name='User', role=User.ROLE_TRADIE, town='Suva',
+        )
+        self.case = PlatformCircumventionCase.objects.create(
+            client=self.client_user, provider=self.tradie_user,
+            total_job_value=Decimal('500.00'), client_fee_amount=Decimal('25.00'),
+            provider_fee_amount=Decimal('25.00'),
+        )
+
+    def test_bulk_mark_paid_stamps_reviewed_by_and_reviewed_at(self):
+        from .admin import PlatformCircumventionCaseAdmin
+        from django.test import RequestFactory
+        factory = RequestFactory()
+        request = factory.post('/admin/marketplace/platformcircumventioncase/')
+        request.user = self.admin_user
+        # message_user requires the messages framework
+        from django.contrib.messages.storage.fallback import FallbackStorage
+        setattr(request, 'session', {})
+        setattr(request, '_messages', FallbackStorage(request))
+
+        model_admin = PlatformCircumventionCaseAdmin(PlatformCircumventionCase, None)
+        model_admin.mark_paid(request, PlatformCircumventionCase.objects.filter(pk=self.case.pk))
+
+        self.case.refresh_from_db()
+        self.assertEqual(self.case.status, PlatformCircumventionCase.STATUS_PAID)
+        self.assertEqual(self.case.reviewed_by, self.admin_user)
+        self.assertIsNotNone(self.case.reviewed_at)
+
+
+class ChangePasswordTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email='changepw@example.com', password='OldPass123',
+            first_name='Change', last_name='PW', role=User.ROLE_CLIENT, town='Suva',
+        )
+
+    def test_wrong_current_password_is_rejected(self):
+        form = ChangePasswordForm({
+            'current_password': 'WrongPass', 'new_password': 'NewPass456', 'new_password_confirm': 'NewPass456',
+        }, user=self.user)
+        self.assertFalse(form.is_valid())
+        self.assertIn('current_password', form.errors)
+
+    def test_mismatched_new_passwords_rejected(self):
+        form = ChangePasswordForm({
+            'current_password': 'OldPass123', 'new_password': 'NewPass456', 'new_password_confirm': 'Different789',
+        }, user=self.user)
+        self.assertFalse(form.is_valid())
+
+    def test_full_change_password_flow_keeps_session_and_updates_password(self):
+        self.client.login(username=self.user.email, password='OldPass123')
+        response = self.client.post(
+            reverse('change_password'),
+            {'current_password': 'OldPass123', 'new_password': 'NewPass456', 'new_password_confirm': 'NewPass456'},
+            secure=True,
+        )
+        self.assertRedirects(response, reverse('dashboard'), fetch_redirect_response=False)
+        self.assertIn('_auth_user_id', self.client.session)  # still logged in
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.check_password('NewPass456'))
+        self.assertFalse(self.user.check_password('OldPass123'))
+
+
+class MigrateToTradieAdminValidationTests(TestCase):
+    def setUp(self):
+        self.admin_user = User.objects.create_superuser(email='migsuper@example.com', password='pass12345')
+        self.client_user = User.objects.create_user(
+            email='migrate-me@example.com', password='pass12345',
+            first_name='Migrate', last_name='Me', role=User.ROLE_CLIENT, town='',
+        )
+
+    def test_missing_service_towns_is_rejected(self):
+        # The validation-failure path re-renders migrate_to_tradie.html,
+        # which crashes under this local environment's Python 3.14 test-
+        # instrumentation issue (see other tests in this file) — render()
+        # is mocked out so the view logic runs without hitting the
+        # template engine, and DB state is asserted directly instead.
+        from django.test import RequestFactory
+        from unittest.mock import patch
+        from . import admin as marketplace_admin
+
+        request = RequestFactory().post(
+            reverse('admin:marketplace_user_migrate_to_tradie', args=[self.client_user.pk]),
+            {'trades': ['cleaning'], 'service_towns': [], 'business_name': ''},
+        )
+        request.user = self.admin_user
+        from django.contrib.messages.storage.fallback import FallbackStorage
+        setattr(request, 'session', {})
+        setattr(request, '_messages', FallbackStorage(request))
+
+        model_admin = marketplace_admin.UserAdmin(User, marketplace_admin.admin.site)
+        with patch('marketplace.admin.render') as mock_render:
+            mock_render.return_value = None
+            model_admin.migrate_to_tradie_view(request, self.client_user.pk)
+        self.assertTrue(mock_render.called)
+        self.client_user.refresh_from_db()
+        self.assertEqual(self.client_user.role, User.ROLE_CLIENT)
+        self.assertFalse(hasattr(self.client_user, 'tradie_profile'))
+
+    def test_valid_migration_succeeds(self):
+        self.client.login(username=self.admin_user.email, password='pass12345')
+        response = self.client.post(
+            reverse('admin:marketplace_user_migrate_to_tradie', args=[self.client_user.pk]),
+            {'trades': ['cleaning'], 'service_towns': ['Suva'], 'business_name': ''},
+            secure=True,
+        )
+        self.assertEqual(response.status_code, 302)
+        self.client_user.refresh_from_db()
+        self.assertEqual(self.client_user.role, User.ROLE_TRADIE)
+        self.assertEqual(self.client_user.tradie_profile.service_towns, ['Suva'])
+
+    def test_staff_without_permission_is_denied(self):
+        limited_staff = User.objects.create_user(
+            email='limited-staff@example.com', password='pass12345',
+            first_name='Limited', last_name='Staff', role='', is_staff=True,
+        )
+        self.client.login(username=limited_staff.email, password='pass12345')
+        response = self.client.post(
+            reverse('admin:marketplace_user_migrate_to_tradie', args=[self.client_user.pk]),
+            {'trades': ['cleaning'], 'service_towns': ['Suva'], 'business_name': ''},
+            secure=True,
+        )
+        self.assertEqual(response.status_code, 403)
+        self.client_user.refresh_from_db()
+        self.assertEqual(self.client_user.role, User.ROLE_CLIENT)
+
+
+class InvoiceResendGuardTests(TestCase):
+    def setUp(self):
+        self.admin_user = User.objects.create_superuser(email='invsuper@example.com', password='pass12345')
+        self.tradie_user = User.objects.create_user(
+            email='inv-guard-tradie@example.com', password='pass12345',
+            first_name='Tradie', last_name='User', role=User.ROLE_TRADIE, town='Suva',
+        )
+        self.invoice = Invoice.objects.create(
+            tradie=self.tradie_user, invoice_number='INV-GUARD-1', total_amount=Decimal('50.00'),
+            status=Invoice.STATUS_SENT, due_date=django_timezone.localdate(),
+        )
+
+    def test_resend_without_confirmation_is_blocked(self):
+        self.client.login(username=self.admin_user.email, password='pass12345')
+        InvoiceNotification_count_before = self.invoice.notifications.count()
+        response = self.client.post(reverse('admin:marketplace_invoice_send', args=[self.invoice.pk]), secure=True)
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(self.invoice.notifications.count(), InvoiceNotification_count_before)
+
+    def test_resend_with_confirmation_proceeds(self):
+        self.client.login(username=self.admin_user.email, password='pass12345')
+        response = self.client.post(
+            reverse('admin:marketplace_invoice_send', args=[self.invoice.pk]),
+            {'confirm_resend': '1'}, secure=True,
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(self.invoice.notifications.exists())
+
+    def test_bulk_send_action_skips_already_sent_invoices(self):
+        from .admin import InvoiceAdmin
+        from django.test import RequestFactory
+        from django.contrib.messages.storage.fallback import FallbackStorage
+        factory = RequestFactory()
+        request = factory.post('/admin/marketplace/invoice/')
+        request.user = self.admin_user
+        setattr(request, 'session', {})
+        setattr(request, '_messages', FallbackStorage(request))
+
+        model_admin = InvoiceAdmin(Invoice, None)
+        model_admin.send_invoices_action(request, Invoice.objects.filter(pk=self.invoice.pk))
+        self.assertFalse(self.invoice.notifications.exists())

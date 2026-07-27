@@ -768,6 +768,16 @@ class PlatformSettings(models.Model):
     def __str__(self):
         return f'Platform Settings – {self.success_fee_rate}% / FJD ${self.success_fee_cap} cap'
 
+    def save(self, *args, **kwargs):
+        """Enforce at most one active row regardless of call path — the
+        admin's has_add_permission() only blocked *creating* a second one;
+        flipping an existing inactive row's `active` back to True bypassed
+        it entirely, and get_active() has no defined behaviour for which
+        row wins if more than one is active."""
+        super().save(*args, **kwargs)
+        if self.active:
+            PlatformSettings.objects.exclude(pk=self.pk).filter(active=True).update(active=False)
+
     @classmethod
     def get_active(cls):
         """Get the active settings record."""

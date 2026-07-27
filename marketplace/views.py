@@ -13,6 +13,7 @@ from django.conf import settings
 from django.contrib.auth.decorators import login_required
 from django.views.decorators.http import require_POST
 from django.core.exceptions import PermissionDenied
+from django.core.paginator import Paginator
 from django.db import DatabaseError, connection, transaction
 from django.db.models import Avg, Count, F, Q
 from django.http import JsonResponse
@@ -28,6 +29,7 @@ from .constants import (
     TOWN_CHOICES,
 )
 from .forms import (
+    ChangePasswordForm,
     ClientRegistrationForm,
     ContactSupportForm,
     LoginForm,
@@ -83,6 +85,37 @@ from .utils import (
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _pagination_querystring_prefix(request):
+    """The current GET querystring with `page` stripped out, so pagination
+    links can preserve active filters (?q=...&town=...) instead of
+    resetting them when moving between pages."""
+    qs = request.GET.copy()
+    qs.pop('page', None)
+    encoded = qs.urlencode()
+    return f'{encoded}&' if encoded else ''
+
+
+def _client_ip(request):
+    return request.META.get('REMOTE_ADDR') or 'unknown'
+
+
+def _rate_limited(request, key_prefix, max_attempts, window_seconds):
+    """Simple cache-based rate limiter, keyed by client IP. Uses Django's
+    configured cache (LocMemCache by default here — per-process, not
+    perfectly precise across multiple gunicorn workers, but a real
+    deterrent against scripted abuse with zero new infrastructure).
+    Returns True if this caller has exceeded the limit and should be
+    blocked."""
+    from django.core.cache import cache
+    key = f'ratelimit:{key_prefix}:{_client_ip(request)}'
+    try:
+        attempts = cache.incr(key)
+    except ValueError:
+        cache.set(key, 1, window_seconds)
+        attempts = 1
+    return attempts > max_attempts
+
 
 def _require_role(request, role):
     if not request.user.is_authenticated or request.user.role != role:
@@ -192,6 +225,9 @@ def contact_support(request):
     inbox goes directly back to them.
     """
     if request.method == 'POST':
+        if _rate_limited(request, 'contact_support', max_attempts=5, window_seconds=3600):
+            flash.error(request, "You've sent several messages recently — please wait a bit before sending another.")
+            return redirect('contact_support')
         form = ContactSupportForm(request.POST)
         if form.is_valid():
             cd = form.cleaned_data
@@ -333,13 +369,29 @@ def login_view(request):
         return redirect('dashboard')
     form = LoginForm(request.POST or None)
     if request.method == 'POST' and form.is_valid():
+        # Only failed attempts count against the limit — a user who
+        # mistypes their password once shouldn't get blocked, but
+        # unlimited guesses per IP was a real brute-force gap. Checked
+        # (read-only) before the attempt, only incremented on failure,
+        # cleared on success — not the generic _rate_limited() helper,
+        # since that always increments on every call.
+        from django.core.cache import cache
+        limit_key = f'ratelimit:login:{_client_ip(request)}'
+        if cache.get(limit_key, 0) >= 10:
+            flash.error(request, 'Too many failed login attempts. Please wait a few minutes and try again.')
+            return render(request, 'marketplace/login.html', {'form': form})
         cd   = form.cleaned_data
         user = authenticate(request, username=cd['email'], password=cd['password'])
         if user:
             login(request, user)
+            cache.delete(limit_key)
             nxt = request.GET.get('next', '')
             return redirect(nxt or 'dashboard')
         else:
+            try:
+                cache.incr(limit_key)
+            except ValueError:
+                cache.set(limit_key, 1, 900)
             flash.error(request, 'Incorrect email or password.')
     return render(request, 'marketplace/login.html', {'form': form})
 
@@ -362,6 +414,12 @@ def password_reset_request(request):
         return redirect('dashboard')
     form = PasswordResetRequestForm(request.POST or None)
     if request.method == 'POST' and form.is_valid():
+        if _rate_limited(request, 'password_reset_request', max_attempts=5, window_seconds=3600):
+            # Same generic message as success, deliberately — this endpoint
+            # must never reveal *why* an email wasn't sent, on top of never
+            # revealing whether the address is registered.
+            flash.success(request, "If that email is registered, we've sent a password reset link to it.")
+            return redirect('login')
         email = form.cleaned_data['email'].lower()
         user = User.objects.filter(email=email).first()
         if user and user.is_active:
@@ -543,7 +601,7 @@ def billing(request):
 # ── Browse tasks ──────────────────────────────────────────────────────────────
 
 def browse_tasks(request):
-    qs = Task.objects.filter(status=Task.STATUS_OPEN).select_related('client')
+    qs = Task.objects.filter(status=Task.STATUS_OPEN).select_related('client').annotate(quote_count_annotated=Count('quotes')).order_by('-created_at')
     category = request.GET.get('category', '').strip()
     keyword  = request.GET.get('q', '').strip()
     town     = request.GET.get('town', '').strip()
@@ -553,8 +611,11 @@ def browse_tasks(request):
         qs = qs.filter(Q(title__icontains=keyword) | Q(description__icontains=keyword))
     if town:
         qs = qs.filter(town=town)
+    page_obj = Paginator(qs, 20).get_page(request.GET.get('page'))
     return render(request, 'marketplace/browse_tasks.html', {
-        'tasks':           qs,
+        'tasks':           page_obj,
+        'page_obj':        page_obj,
+        'querystring_prefix': _pagination_querystring_prefix(request),
         'category_filter': category,
         'keyword_filter':  keyword,
         'town_filter':     town,
@@ -600,10 +661,13 @@ def browse_tradies(request):
     if town:
         profiles = [p for p in profiles if town in (p.service_towns or [])]
 
+    page_obj = Paginator(profiles, 20).get_page(request.GET.get('page'))
+    profiles = list(page_obj)
+
     # Bulk-aggregate ratings in a single query rather than the two per-profile
     # queries get_public_rating_breakdown()/public_completed_job_count() would
-    # otherwise run (N+1 — this page isn't paginated, so a growing directory
-    # would mean a growing number of extra queries per request).
+    # otherwise run (N+1) — scoped to just this page's profiles now that the
+    # directory is paginated.
     rating_rows = (
         PublicReview.objects.filter(ratee_id__in=[p.user_id for p in profiles])
         .values('ratee_id')
@@ -628,6 +692,8 @@ def browse_tradies(request):
 
     return render(request, 'marketplace/browse_tradies.html', {
         'profiles':         profiles,
+        'page_obj':         page_obj,
+        'querystring_prefix': _pagination_querystring_prefix(request),
         'category_filter':  category,
         'town_filter':      town,
         'keyword_filter':   keyword,
@@ -841,7 +907,16 @@ def submit_quote(request, pk):
             q.estimated_discount_amount = discount.quantize(Decimal('0.01'))
 
             effective_fee = q.estimated_platform_fee - q.estimated_discount_amount
-            q.estimated_provider_take_home = (q.price - effective_fee).quantize(Decimal('0.01'))
+            after_fee = q.price - effective_fee
+            # Mirror the live client-side calculator (task_detail.html), which
+            # deducts VAT from what's left after the platform fee — VAT is
+            # money the tradie collects on the client's behalf, not real
+            # take-home. Previously this was only done in the JS preview,
+            # so the number shown while quoting didn't match what was saved.
+            if q.vat_applicable and q.vat_rate:
+                vat_multiplier = Decimal('1') - (q.vat_rate / Decimal('100'))
+                after_fee = after_fee * vat_multiplier
+            q.estimated_provider_take_home = after_fee.quantize(Decimal('0.01'))
             q.estimated_tradie_take_home = q.estimated_provider_take_home
         q.save()
         notify_client_new_quote(q)
@@ -1113,6 +1188,23 @@ def notification_settings(request):
     return render(request, 'marketplace/notification_settings.html', {'form': form})
 
 
+@login_required
+def change_password(request):
+    form = ChangePasswordForm(request.POST or None, user=request.user)
+    if request.method == 'POST' and form.is_valid():
+        request.user.set_password(form.cleaned_data['new_password'])
+        request.user.save(update_fields=['password'])
+        # Without this, changing your own password logs you out immediately
+        # afterward — Django compares the session's stored auth hash
+        # (derived from the password) against the new one on the next
+        # request and finds a mismatch.
+        from django.contrib.auth import update_session_auth_hash
+        update_session_auth_hash(request, request.user)
+        flash.success(request, 'Your password has been changed.')
+        return redirect('dashboard')
+    return render(request, 'marketplace/change_password.html', {'form': form})
+
+
 # ── Messages inbox ────────────────────────────────────────────────────────────
 
 @login_required
@@ -1188,8 +1280,11 @@ def market_browse(request):
     if category == MarketListing.CATEGORY_FOOD and food_type:
         listings = listings.filter(food_type=food_type)
     listings = [l for l in listings if l.has_future_dates()]
+    page_obj = Paginator(listings, 20).get_page(request.GET.get('page'))
     return render(request, 'marketplace/market_browse.html', {
-        'listings': listings,
+        'listings': page_obj,
+        'page_obj': page_obj,
+        'querystring_prefix': _pagination_querystring_prefix(request),
         'category_choices': MarketListing.CATEGORY_CHOICES,
         'food_type_choices': MarketListing.FOOD_TYPE_CHOICES,
         'category_filter': category,
@@ -1304,7 +1399,12 @@ def create_market_listing(request):
             if is_new_founder_eligible:
                 # Re-check under lock at save time — two sellers hitting
                 # "first listing" concurrently must not both slip in under
-                # the slot cap.
+                # the slot cap. Locking only the acting user's own row isn't
+                # enough (two different users lock two different rows and
+                # neither blocks the other) — lock the PlatformSettings
+                # singleton as a shared mutex so the count-then-set check
+                # below is fully serialized across every concurrent caller.
+                PlatformSettings.objects.select_for_update().filter(pk=get_active_platform_settings().pk).exists()
                 locked_user = User.objects.select_for_update().get(pk=request.user.pk)
                 if (
                     not locked_user.is_market_founding_member

@@ -3,10 +3,10 @@
 {% block content %}
 <div id="content-main">
   <h1>Migrate {{ user_obj }} to Local Professional</h1>
-  <div class="module" style="padding:10px 12px;margin-bottom:15px;">
-    <p style="margin:4px 0;"><strong>Name:</strong> {{ user_obj.full_name }}</p>
-    <p style="margin:4px 0;"><strong>Email:</strong> {{ user_obj.email }}</p>
-    <p style="margin:4px 0;"><strong>Current town:</strong> {{ user_obj.town|default:"—" }}</p>
+  <div class="module">
+    <p><strong>Name:</strong> {{ user_obj.full_name }}</p>
+    <p><strong>Email:</strong> {{ user_obj.email }}</p>
+    <p><strong>Current town:</strong> {{ user_obj.town|default:"—" }}</p>
   </div>
   <p>This switches the account from client to local professional (their email and password stay the same), creates a local professional profile pending verification, and emails them to log back in on the local pro side.</p>
 
@@ -16,7 +16,7 @@
       <div class="form-row">
         <div>
           <label for="id_business_name">Business name (optional):</label>
-          <input type="text" name="business_name" id="id_business_name" value="{{ business_name_value }}" style="width:320px;">
+          <input type="text" name="business_name" id="id_business_name" value="{{ business_name_value }}" class="vTextField">
         </div>
       </div>
       <div class="form-row">

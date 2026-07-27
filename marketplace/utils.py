@@ -5,6 +5,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from datetime import datetime, timedelta
 from django.utils import timezone
 from django.db import transaction
+from django.db.models import F
 
 from .models import (
     PlatformSettings, PlatformFee, Invoice, InvoiceLine, InvoiceNotification, Quote, Task,
@@ -20,15 +21,21 @@ def get_active_platform_settings():
 def calculate_platform_fee(job_value, settings=None):
     """
     Calculate platform fee based on job value and active settings.
-    
+
     Returns: (fee_rate, fee_cap, calculated_fee)
     """
     if settings is None:
         settings = get_active_platform_settings()
-    
+
     if not settings:
         return Decimal('0'), Decimal('0'), Decimal('0')
-    
+
+    job_value = Decimal(str(job_value))
+    if job_value < 0:
+        # A negative job value is a data-entry error, not a real discount —
+        # never persist a negative fee/credit from it.
+        job_value = Decimal('0')
+
     large_threshold = Decimal(str(settings.large_job_threshold))
     success_rate = Decimal(str(settings.success_fee_rate))
     large_rate = Decimal(str(settings.large_job_fee_rate))
@@ -43,6 +50,7 @@ def calculate_platform_fee(job_value, settings=None):
         if calculated_fee > fee_cap:
             calculated_fee = fee_cap
 
+    calculated_fee = calculated_fee.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
     return fee_rate, fee_cap, calculated_fee
 
 
@@ -315,16 +323,27 @@ def create_platform_fee_for_task(task, final_job_value):
         accepted_quote = task.quotes.filter(status=Quote.STATUS_ACCEPTED).first()
         if accepted_quote:
             if accepted_quote.used_founding_credit:
-                profile = getattr(task.assigned_tradie, 'tradie_profile', None)
+                # Locked so two of this tradie's jobs completing at the same
+                # time can't both read the same starting balance and both
+                # spend it (last-write-wins would otherwise double-spend it).
+                profile = (
+                    TradieProfile.objects.select_for_update()
+                    .filter(user=task.assigned_tradie)
+                    .first()
+                )
                 if profile and profile.is_founding_member and profile.founding_member_credit_balance > 0:
                     discount_amount = min(profile.founding_member_credit_balance, gross_fee_amount)
                     profile.founding_member_credit_balance -= discount_amount
                     profile.save(update_fields=['founding_member_credit_balance'])
             elif accepted_quote.promo_code_id:
-                promo = accepted_quote.promo_code
+                # Locked for the same reason, and re-checked after the lock
+                # since is_valid_now()/max_uses could have changed between
+                # quote time and now.
+                from .models import PromoCode
+                promo = PromoCode.objects.select_for_update().filter(pk=accepted_quote.promo_code_id).first()
                 if promo and promo.is_valid_now():
                     discount_amount = promo.calculate_discount(gross_fee_amount)
-                    promo.times_used += 1
+                    promo.times_used = F('times_used') + 1
                     promo.save(update_fields=['times_used'])
 
         fee_amount = gross_fee_amount - discount_amount
@@ -421,13 +440,21 @@ def create_invoice_with_lines(tradie, period_start, period_end, fee_ids, manual_
     each as invoiced — plus any manual adjustment lines.
     """
     settings = get_active_platform_settings()
-    fees = list(PlatformFee.objects.filter(
-        pk__in=fee_ids, tradie=tradie, status=PlatformFee.STATUS_PENDING
-    ).select_related('task'))
-
     total = Decimal('0')
 
     with transaction.atomic():
+        # Locked, and re-filtered on status=PENDING inside the transaction
+        # (not fetched beforehand) — two overlapping invoice-generation runs
+        # selecting the same fees must not both flip them to INVOICED and
+        # both bill them. Whichever transaction gets here second will simply
+        # see these rows no longer match status=PENDING once it acquires
+        # the lock, and skip them.
+        fees = list(
+            PlatformFee.objects.select_for_update()
+            .filter(pk__in=fee_ids, tradie=tradie, status=PlatformFee.STATUS_PENDING)
+            .select_related('task')
+        )
+
         invoice = Invoice.objects.create(
             tradie=tradie,
             invoice_number=generate_invoice_number(tradie),
@@ -560,8 +587,6 @@ def send_invoice_notifications(invoice):
     invoice.save(update_fields=['status', 'sent_at'])
 
     return email_sent
-
-    return invoice
 
 
 def create_weekly_invoices(period_start, period_end):
