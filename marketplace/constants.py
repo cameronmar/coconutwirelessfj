@@ -27,6 +27,9 @@ TRADE_CHOICES = [
     ('welder',      '🔥 Welder'),
     ('fencing',     '🚧 Fencing'),
     ('solar',       '☀️ Solar Installation'),
+    ('civil_works', '⛏️ Civil Works'),
+    ('concreting',  '🪨 Concreting / Cement'),
+    ('heavy_equipment', '🚜 Heavy Equipment'),
 ]
 
 TOWN_CHOICES = [
