@@ -153,45 +153,11 @@
         <h3>Availability</h3>
         <div class="det-row"><span class="lbl">Service area</span><span>{{ profile.service_towns_display }}</span></div>
         <div class="det-row"><span class="lbl">Experience</span><span>{{ profile.years_experience|default:"—" }}</span></div>
-        {% if profile.tin %}<div class="det-row"><span class="lbl">TIN Number</span><span style="color:var(--green)">✓ {{ profile.tin }}</span></div>{% endif %}
       </div>
 
-      {% if profile.tin_letter or profile.business_licence or profile.public_liability_insurance or profile.electrical_contractors_licence or profile.plumber_licence %}
+      {% if profile.documents_verified %}
       <div class="side-card">
-        <h3>📄 Credentials</h3>
-        {% if profile.tin_letter %}
-        <div class="det-row">
-          <span class="lbl">TIN Letter</span>
-          <a href="{{ profile.tin_letter.url }}" target="_blank" style="color:var(--blue);font-size:.85rem;font-weight:600;">View ↗</a>
-        </div>
-        {% endif %}
-        {% if profile.business_licence %}
-        <div class="det-row">
-          <span class="lbl">Business Licence</span>
-          <a href="{{ profile.business_licence.url }}" target="_blank" style="color:var(--blue);font-size:.85rem;font-weight:600;">View ↗</a>
-        </div>
-        {% endif %}
-        {% if profile.public_liability_insurance %}
-        <div class="det-row">
-          <span class="lbl">Public Liability</span>
-          <a href="{{ profile.public_liability_insurance.url }}" target="_blank" style="color:var(--blue);font-size:.85rem;font-weight:600;">View ↗</a>
-        </div>
-        {% endif %}
-        {% if profile.electrical_contractors_licence %}
-        <div class="det-row">
-          <span class="lbl">Electrical Licence</span>
-          <a href="{{ profile.electrical_contractors_licence.url }}" target="_blank" style="color:var(--blue);font-size:.85rem;font-weight:600;">View ↗</a>
-        </div>
-        {% endif %}
-        {% if profile.plumber_licence %}
-        <div class="det-row">
-          <span class="lbl">Plumber Licence</span>
-          <a href="{{ profile.plumber_licence.url }}" target="_blank" style="color:var(--blue);font-size:.85rem;font-weight:600;">View ↗</a>
-        </div>
-        {% endif %}
-        {% if profile.documents_verified %}
-        <div style="margin-top:10px;padding:7px 10px;background:#e8f8f0;border-radius:8px;font-size:.8rem;color:var(--green);font-weight:600;">✅ Documents verified</div>
-        {% endif %}
+        <div style="padding:7px 10px;background:#e8f8f0;border-radius:8px;font-size:.8rem;color:var(--green);font-weight:600;">✅ Verification documents checked by our team</div>
       </div>
       {% endif %}
 

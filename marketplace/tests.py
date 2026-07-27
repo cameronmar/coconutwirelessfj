@@ -12,7 +12,17 @@ from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from .forms import ServiceAreaForm
-from .models import Invoice, InvoiceLine, Quote, Task, TradieProfile, User
+from .models import (
+    Invoice,
+    InvoiceLine,
+    Message,
+    Quote,
+    QuotingAppointment,
+    QuotingAppointmentSlot,
+    Task,
+    TradieProfile,
+    User,
+)
 from .utils import send_invoice_notifications
 
 
@@ -491,3 +501,150 @@ class ServiceAreaViewTests(TestCase):
         self.assertEqual(response.status_code, 403)
         self.profile.refresh_from_db()
         self.assertEqual(self.profile.service_towns, ['Suva'])
+
+
+class QuotingAppointmentSecurityTests(TestCase):
+    """Covers the fix for state-mutating appointment actions previously
+    being reachable via plain GET (no @require_POST), which meant a link
+    prefetch/crawler could trigger them without tripping CSRF checks
+    (Django's CSRF middleware only gates unsafe methods)."""
+
+    def setUp(self):
+        self.client_user = User.objects.create_user(
+            email='appt-client@example.com', password='pass12345',
+            first_name='Client', last_name='User', role=User.ROLE_CLIENT, town='Suva',
+        )
+        self.tradie_user = User.objects.create_user(
+            email='appt-tradie@example.com', password='pass12345',
+            first_name='Tradie', last_name='User', role=User.ROLE_TRADIE, town='Suva',
+        )
+        TradieProfile.objects.create(
+            user=self.tradie_user, trades=['cleaning'], service_towns=['Suva'],
+            verification_status=TradieProfile.VERIFICATION_APPROVED,
+        )
+        self.task = Task.objects.create(
+            client=self.client_user, title='Fix sink', category='plumbing',
+            description='Kitchen sink leaking', budget=Decimal('150.00'), town='Suva',
+        )
+        self.appointment = QuotingAppointment.objects.create(
+            task=self.task, client=self.client_user, provider=self.tradie_user, status=QuotingAppointment.STATUS_REQUESTED,
+        )
+        self.slot = QuotingAppointmentSlot.objects.create(
+            quoting_appointment=self.appointment,
+            proposed_date='2026-08-01', start_time='09:00', end_time='10:00',
+        )
+
+    def test_accept_slot_rejects_get(self):
+        self.client.login(username=self.client_user.email, password='pass12345')
+        response = self.client.get(
+            reverse('accept_quoting_appointment_slot', args=[self.task.pk, self.appointment.pk, self.slot.pk]),
+            secure=True,
+        )
+        self.assertEqual(response.status_code, 405)
+        self.appointment.refresh_from_db()
+        self.assertEqual(self.appointment.status, QuotingAppointment.STATUS_REQUESTED)
+
+    def test_accept_slot_still_works_via_post(self):
+        self.client.login(username=self.client_user.email, password='pass12345')
+        response = self.client.post(
+            reverse('accept_quoting_appointment_slot', args=[self.task.pk, self.appointment.pk, self.slot.pk]),
+            secure=True,
+        )
+        self.assertEqual(response.status_code, 302)
+        self.appointment.refresh_from_db()
+        self.assertEqual(self.appointment.status, QuotingAppointment.STATUS_ACCEPTED)
+
+    def test_decline_appointment_rejects_get(self):
+        self.client.login(username=self.client_user.email, password='pass12345')
+        response = self.client.get(
+            reverse('decline_quoting_appointment', args=[self.task.pk, self.appointment.pk]),
+            secure=True,
+        )
+        self.assertEqual(response.status_code, 405)
+        self.appointment.refresh_from_db()
+        self.assertEqual(self.appointment.status, QuotingAppointment.STATUS_REQUESTED)
+
+    def test_cancel_appointment_rejects_get(self):
+        self.client.login(username=self.tradie_user.email, password='pass12345')
+        response = self.client.get(
+            reverse('cancel_quoting_appointment', args=[self.task.pk, self.appointment.pk]),
+            secure=True,
+        )
+        self.assertEqual(response.status_code, 405)
+        self.appointment.refresh_from_db()
+        self.assertEqual(self.appointment.status, QuotingAppointment.STATUS_REQUESTED)
+
+
+class ConversationAccessTests(TestCase):
+    """Covers the fix for conversation() only checking the requester is a
+    task party, never the other end — previously a logged-in user could
+    inject a message into a total stranger's inbox by guessing a task pk
+    and user pk in /messages/<tpk>/<opk>/."""
+
+    def setUp(self):
+        self.client_user = User.objects.create_user(
+            email='conv-client@example.com', password='pass12345',
+            first_name='Client', last_name='User', role=User.ROLE_CLIENT, town='Suva',
+        )
+        self.tradie_user = User.objects.create_user(
+            email='conv-tradie@example.com', password='pass12345',
+            first_name='Tradie', last_name='User', role=User.ROLE_TRADIE, town='Suva',
+        )
+        self.stranger = User.objects.create_user(
+            email='conv-stranger@example.com', password='pass12345',
+            first_name='Stranger', last_name='User', role=User.ROLE_CLIENT, town='Nadi',
+        )
+        self.task = Task.objects.create(
+            client=self.client_user, title='Fix sink', category='plumbing',
+            description='Kitchen sink leaking', budget=Decimal('150.00'), town='Suva',
+        )
+        Quote.objects.create(task=self.task, tradie=self.tradie_user, price=Decimal('120.00'), message='Can do it', quote_includes='labour_only')
+
+    def test_task_client_cannot_message_a_stranger_to_the_task(self):
+        self.client.login(username=self.client_user.email, password='pass12345')
+        response = self.client.post(
+            reverse('conversation', args=[self.task.pk, self.stranger.pk]),
+            {'body': 'hello'},
+            secure=True,
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertFalse(Message.objects.filter(task=self.task, recipient=self.stranger).exists())
+
+    def test_stranger_cannot_open_conversation_between_others(self):
+        self.client.login(username=self.stranger.email, password='pass12345')
+        response = self.client.post(
+            reverse('conversation', args=[self.task.pk, self.tradie_user.pk]),
+            {'body': 'hello'},
+            secure=True,
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_client_can_still_message_the_quoting_tradie(self):
+        self.client.login(username=self.client_user.email, password='pass12345')
+        response = self.client.post(
+            reverse('conversation', args=[self.task.pk, self.tradie_user.pk]),
+            {'body': 'hello'},
+            secure=True,
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(Message.objects.filter(task=self.task, sender=self.client_user, recipient=self.tradie_user).exists())
+
+
+class TradieProfileDoesNotExposeDocumentsTests(TestCase):
+    """Rendering tradie_profile.html via self.client crashes in this local
+    Python 3.14 dev environment (see FUTURE_IMPLEMENTATION_STATUS.md /
+    other tests in this file for the same, pre-existing limitation), so
+    this is a static regression guard on the template source instead of a
+    rendered-response assertion: verification documents and the raw TIN
+    number must never be linked/printed on this public-facing page."""
+
+    def test_template_does_not_link_verification_documents_or_tin(self):
+        template_path = (
+            PROJECT_ROOT / 'marketplace' / 'templates' / 'marketplace' / 'tradie_profile.html'
+        )
+        content = template_path.read_text(encoding='utf-8')
+        for forbidden in (
+            'tin_letter.url', 'business_licence.url', 'public_liability_insurance.url',
+            'electrical_contractors_licence.url', 'plumber_licence.url', 'profile.tin }}',
+        ):
+            self.assertNotIn(forbidden, content, f'{forbidden!r} must not appear in tradie_profile.html — it is a public page.')

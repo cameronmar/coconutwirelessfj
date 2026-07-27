@@ -125,6 +125,20 @@ def _require_quoting_tradie(request):
     return None
 
 
+def _task_conversation_parties(task):
+    """Everyone eligible to message about this task: the client, the
+    assigned tradie, anyone who's quoted, and anyone who's requested a
+    quoting appointment — regardless of quote/appointment status, since a
+    withdrawn/rejected quote shouldn't retroactively lock someone out of
+    a conversation they were already legitimately part of."""
+    ids = {task.client_id}
+    if task.assigned_tradie_id:
+        ids.add(task.assigned_tradie_id)
+    ids.update(task.quotes.values_list('tradie_id', flat=True))
+    ids.update(task.quoting_appointments.values_list('provider_id', flat=True))
+    return ids
+
+
 def _build_conversations(user):
     """Return a list of dicts describing each unique (task, other_user) conversation,
     ordered by most-recent message first."""
@@ -814,6 +828,7 @@ def book_quoting_appointment(request, pk):
 
 
 @login_required
+@require_POST
 def accept_quoting_appointment_slot(request, pk, appt_pk, slot_pk):
     _require_task_poster(request)
     task = get_object_or_404(Task, pk=pk, client=request.user)
@@ -830,6 +845,7 @@ def accept_quoting_appointment_slot(request, pk, appt_pk, slot_pk):
 
 
 @login_required
+@require_POST
 def decline_quoting_appointment(request, pk, appt_pk):
     _require_task_poster(request)
     task = get_object_or_404(Task, pk=pk, client=request.user)
@@ -841,6 +857,7 @@ def decline_quoting_appointment(request, pk, appt_pk):
 
 
 @login_required
+@require_POST
 def cancel_quoting_appointment(request, pk, appt_pk):
     approval_redirect = _require_quoting_tradie(request)
     if approval_redirect:
@@ -1038,11 +1055,12 @@ def inbox(request):
 def conversation(request, tpk, opk):
     task        = get_object_or_404(Task, pk=tpk)
     other_user  = get_object_or_404(User, pk=opk)
-    # Ensure the logged-in user is actually part of this task
+    # Both the requester AND the other party must actually be part of this
+    # task — otherwise a logged-in user could message (or read messages
+    # with) a complete stranger by guessing a user pk in the URL.
     u = request.user
-    if u != task.client and u != task.assigned_tradie and not (
-        task.quotes.filter(tradie=u).exists()
-    ) and not task.quoting_appointments.filter(provider=u).exists():
+    party_ids = _task_conversation_parties(task)
+    if u.pk not in party_ids or other_user.pk not in party_ids:
         raise PermissionDenied
 
     if request.method == 'POST':
