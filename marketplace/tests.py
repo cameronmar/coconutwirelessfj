@@ -11,10 +11,12 @@ from django.db import DatabaseError
 from django.test import TestCase, override_settings
 from django.urls import reverse
 
-from .forms import ServiceAreaForm
+from .forms import MarketOrderForm, ServiceAreaForm
 from .models import (
     Invoice,
     InvoiceLine,
+    MarketListing,
+    MarketOrder,
     Message,
     Quote,
     QuotingAppointment,
@@ -312,6 +314,36 @@ class ClosedBetaAndApprovalFlowTests(TestCase):
         self.assertEqual(response.status_code, 302)
         user = User.objects.get(email='invited-tradie@example.com')
         self.assertEqual(user.tradie_profile.verification_status, TradieProfile.VERIFICATION_PENDING)
+
+    def test_tradie_can_register_without_a_business_name(self):
+        # Individual contractors don't necessarily operate under a
+        # registered business/company name — business_name is optional.
+        response = self.client.post(
+            reverse('register_tradie'),
+            {
+                'first_name': 'Solo',
+                'last_name': 'Contractor',
+                'email': 'solo-contractor@example.com',
+                'mobile': '+679 111 2222',
+                'town': 'Suva',
+                'password': 'pass12345',
+                'password_confirm': 'pass12345',
+                'business_name': '',
+                'tin': '',
+                'years_experience': '1-3 years',
+                'bio': 'Independent contractor',
+                'trades': ['cleaning'],
+                'service_towns': ['Suva'],
+                'accepted_terms': 'on',
+                'accepted_platform_circumvention': 'on',
+                'accepted_invoicing_terms': 'on',
+                'tin_letter': SimpleUploadedFile('tin.pdf', b'pdf-content', content_type='application/pdf'),
+            },
+            secure=True,
+        )
+        self.assertEqual(response.status_code, 302)
+        user = User.objects.get(email='solo-contractor@example.com')
+        self.assertEqual(user.tradie_profile.business_name, '')
         self.assertFalse(user.tradie_profile.documents_verified)
 
     def test_pending_tradie_can_submit_quote(self):
@@ -648,3 +680,115 @@ class TradieProfileDoesNotExposeDocumentsTests(TestCase):
             'electrical_contractors_licence.url', 'plumber_licence.url', 'profile.tin }}',
         ):
             self.assertNotIn(forbidden, content, f'{forbidden!r} must not appear in tradie_profile.html — it is a public page.')
+
+
+class TradieDashboardMissingProfileTests(TestCase):
+    def test_redirects_to_contact_support_instead_of_crashing(self):
+        user = User.objects.create_user(
+            email='noprofile@example.com', password='pass12345',
+            first_name='No', last_name='Profile', role=User.ROLE_TRADIE, town='Suva',
+        )
+        self.client.login(username=user.email, password='pass12345')
+        response = self.client.get(reverse('tradie_dashboard'), secure=True)
+        self.assertRedirects(response, reverse('contact_support'), fetch_redirect_response=False)
+
+
+class MarketOrderFulfillTests(TestCase):
+    def setUp(self):
+        self.seller = User.objects.create_user(
+            email='seller@example.com', password='pass12345',
+            first_name='Sell', last_name='Er', role=User.ROLE_CLIENT, town='Suva',
+        )
+        self.buyer = User.objects.create_user(
+            email='buyer@example.com', password='pass12345',
+            first_name='Buy', last_name='Er', role=User.ROLE_CLIENT, town='Suva',
+        )
+        self.listing = MarketListing.objects.create(
+            seller=self.seller, category=MarketListing.CATEGORY_OTHER, title='Handmade baskets',
+            take_home_per_unit=Decimal('10.00'), price_per_unit=Decimal('12.00'),
+            fee_rate_at_listing=Decimal('7.5'), units_available=10,
+            fulfillment_method=MarketListing.FULFILLMENT_PICKUP, pickup_town='Suva',
+            available_dates=['2026-08-01'],
+        )
+        self.order = MarketOrder.objects.create(
+            listing=self.listing, buyer=self.buyer, quantity=2,
+            unit_price_at_order=Decimal('12.00'), total_price=Decimal('24.00'),
+            platform_fee_amount=Decimal('1.80'), fulfillment_method=MarketListing.FULFILLMENT_PICKUP,
+            requested_date='2026-08-01', status=MarketOrder.STATUS_ACCEPTED,
+        )
+
+    def test_seller_can_mark_accepted_order_fulfilled(self):
+        self.client.login(username=self.seller.email, password='pass12345')
+        response = self.client.post(reverse('market_order_respond', args=[self.order.pk, 'fulfill']), secure=True)
+        self.assertRedirects(response, reverse('my_market_listings'), fetch_redirect_response=False)
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, MarketOrder.STATUS_FULFILLED)
+
+    def test_pending_order_cannot_be_fulfilled_directly(self):
+        # Uses RequestFactory + a direct view call rather than self.client:
+        # Http404 renders 404.html, which hits the same pre-existing
+        # Python 3.14 test-instrumentation crash as any other rendered
+        # template in this local environment (see other tests in this
+        # file) — calling the view directly lets Http404 propagate as a
+        # plain exception instead.
+        from django.http import Http404
+        from django.test import RequestFactory
+        from . import views as marketplace_views
+
+        self.order.status = MarketOrder.STATUS_PENDING
+        self.order.save()
+        request = RequestFactory().post(reverse('market_order_respond', args=[self.order.pk, 'fulfill']))
+        request.user = self.seller
+        with self.assertRaises(Http404):
+            marketplace_views.market_order_respond(request, self.order.pk, 'fulfill')
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, MarketOrder.STATUS_PENDING)
+
+    def test_fulfilled_order_can_no_longer_be_cancelled_by_buyer(self):
+        self.order.status = MarketOrder.STATUS_FULFILLED
+        self.order.save()
+        self.client.login(username=self.buyer.email, password='pass12345')
+        response = self.client.post(reverse('market_order_cancel', args=[self.order.pk]), secure=True)
+        self.assertRedirects(response, reverse('my_market_orders'), fetch_redirect_response=False)
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, MarketOrder.STATUS_FULFILLED)
+
+
+class MarketOrderDeliveryTownScopingTests(TestCase):
+    def test_delivery_town_choices_are_scoped_to_listing(self):
+        seller = User.objects.create_user(
+            email='deliv-seller@example.com', password='pass12345',
+            first_name='Sell', last_name='Er', role=User.ROLE_CLIENT, town='Suva',
+        )
+        listing = MarketListing.objects.create(
+            seller=seller, category=MarketListing.CATEGORY_OTHER, title='Firewood bundles',
+            take_home_per_unit=Decimal('5.00'), price_per_unit=Decimal('6.00'),
+            fee_rate_at_listing=Decimal('7.5'), units_available=20,
+            fulfillment_method=MarketListing.FULFILLMENT_DELIVERY,
+            delivery_towns=['Suva', 'Nausori'], available_dates=['2026-08-01'],
+        )
+        form = MarketOrderForm(listing=listing)
+        choice_values = [value for value, _ in form.fields['delivery_town'].choices]
+        self.assertEqual(set(choice_values), {'', 'Suva', 'Nausori'})
+
+
+class MarketListingClientSellerProfileLinkTests(TestCase):
+    def test_client_seller_listing_page_does_not_404_on_seller_link(self):
+        seller = User.objects.create_user(
+            email='client-seller@example.com', password='pass12345',
+            first_name='Client', last_name='Seller', role=User.ROLE_CLIENT, town='Suva',
+        )
+        listing = MarketListing.objects.create(
+            seller=seller, category=MarketListing.CATEGORY_OTHER, title='Garden tools',
+            take_home_per_unit=Decimal('8.00'), price_per_unit=Decimal('10.00'),
+            fee_rate_at_listing=Decimal('7.5'), units_available=5,
+            fulfillment_method=MarketListing.FULFILLMENT_PICKUP, pickup_town='Suva',
+            available_dates=['2026-08-01'],
+        )
+        # Rendering market_listing_detail.html crashes under this local
+        # environment's Python 3.14 test-instrumentation issue (see other
+        # tests in this file), so this checks the template source directly:
+        # the seller link must be conditional on role, not unconditional.
+        template_path = PROJECT_ROOT / 'marketplace' / 'templates' / 'marketplace' / 'market_listing_detail.html'
+        content = template_path.read_text(encoding='utf-8')
+        self.assertIn("if listing.seller.role == 'tradie'", content)

@@ -1,4 +1,5 @@
 {% extends "marketplace/base.html" %}
+{% load marketplace_extras %}
 {% block title %}Job Feedback – The Coconut Wireless Network{% endblock %}
 
 {% block extra_css %}
@@ -50,6 +51,9 @@
         </label>
         {% endfor %}
       </div>
+      {% with bound_field=form|getitem:crit.field %}
+        {% if bound_field.errors %}{% for e in bound_field.errors %}<div class="field-error">{{ e }}</div>{% endfor %}{% endif %}
+      {% endwith %}
     </div>
     {% endfor %}
 

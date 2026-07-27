@@ -69,6 +69,7 @@ main{display:flex;align-items:center;justify-content:center;padding:36px 20px;mi
           <div class="field">
             <label>Mobile</label>
             {{ form.mobile }}
+            {% for e in form.mobile.errors %}<div class="field-error">{{ e }}</div>{% endfor %}
           </div>
           <div class="field">
             <label>Town</label>
@@ -82,6 +83,7 @@ main{display:flex;align-items:center;justify-content:center;padding:36px 20px;mi
             {{ form.password }}
             <button type="button" class="pw-toggle" data-target="id_password" aria-label="Show password">👁</button>
           </div>
+          {% for e in form.password.errors %}<div class="field-error">{{ e }}</div>{% endfor %}
         </div>
         <div class="field">
           <label>Confirm password</label>
@@ -89,6 +91,7 @@ main{display:flex;align-items:center;justify-content:center;padding:36px 20px;mi
             {{ form.password_confirm }}
             <button type="button" class="pw-toggle" data-target="id_password_confirm" aria-label="Show password">👁</button>
           </div>
+          {% for e in form.password_confirm.errors %}<div class="field-error">{{ e }}</div>{% endfor %}
         </div>
         {% if form.non_field_errors %}
           <div class="field-error" style="margin-bottom:12px;">{{ form.non_field_errors }}</div>

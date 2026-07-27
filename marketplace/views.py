@@ -210,8 +210,9 @@ def contact_support(request):
             )
             flash.success(request, "Thanks for reaching out — we've been notified and will be in touch soon.")
             return redirect('contact_support')
-        for err in form.errors.values():
-            flash.error(request, str(err))
+        for error_list in form.errors.values():
+            for message in error_list:
+                flash.error(request, message)
     else:
         initial = {}
         if request.user.is_authenticated:
@@ -379,7 +380,10 @@ def client_dashboard(request):
 def tradie_dashboard(request):
     _require_role(request, User.ROLE_TRADIE)
     profile = _get_tradie_profile(request.user)
-    tradie_can_quote = profile.can_quote() if profile else False
+    if not profile:
+        flash.warning(request, 'Your local professional profile could not be found. Please contact support.')
+        return redirect('contact_support')
+    tradie_can_quote = profile.can_quote()
 
     nearby = Task.objects.none()
     if tradie_can_quote and profile.service_towns:
@@ -585,7 +589,7 @@ def post_task(request):
 
 def task_detail(request, pk):
     task   = get_object_or_404(Task, pk=pk)
-    quotes = task.quotes.select_related('tradie').order_by('created_at')
+    quotes = task.quotes.select_related('tradie', 'tradie__tradie_profile').order_by('created_at')
 
     user_quote        = None
     can_quote         = False
@@ -772,8 +776,9 @@ def submit_quote(request, pk):
         notify_client_new_quote(q)
         flash.success(request, 'Quote submitted! The client will be in touch.')
     else:
-        for err in form.errors.values():
-            flash.error(request, str(err))
+        for error_list in form.errors.values():
+            for message in error_list:
+                flash.error(request, message)
     return redirect('task_detail', pk=pk)
 
 
@@ -1071,6 +1076,8 @@ def conversation(request, tpk, opk):
                 body=form.cleaned_data['body'],
             )
             notify_message_recipient(msg)
+        else:
+            flash.error(request, "Message wasn't sent — it can't be empty.")
         return redirect('conversation', tpk=tpk, opk=opk)
 
     chat_messages = Message.objects.filter(
@@ -1264,6 +1271,14 @@ def my_market_listings(request):
 @login_required
 @require_POST
 def market_order_respond(request, pk, action):
+    if action == 'fulfill':
+        order = get_object_or_404(MarketOrder, pk=pk, listing__seller=request.user, status=MarketOrder.STATUS_ACCEPTED)
+        order.status = MarketOrder.STATUS_FULFILLED
+        flash.success(request, 'Order marked as fulfilled.')
+        order.save(update_fields=['status'])
+        notify_buyer_market_order_update(order)
+        return redirect('my_market_listings')
+
     order = get_object_or_404(MarketOrder, pk=pk, listing__seller=request.user, status=MarketOrder.STATUS_PENDING)
     if action == 'accept':
         order.status = MarketOrder.STATUS_ACCEPTED

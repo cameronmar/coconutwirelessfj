@@ -56,7 +56,7 @@
         </div>
         <div class="field"><label>Email address</label>{{ form.email }}{% for e in form.email.errors %}<div class="field-error">{{e}}</div>{% endfor %}</div>
         <div class="row2">
-          <div class="field"><label>Mobile</label>{{ form.mobile }}</div>
+          <div class="field"><label>Mobile</label>{{ form.mobile }}{% for e in form.mobile.errors %}<div class="field-error">{{e}}</div>{% endfor %}</div>
           <div class="field"><label>Town / Service Area</label>{{ form.town }}{% for e in form.town.errors %}<div class="field-error">{{e}}</div>{% endfor %}</div>
         </div>
         <div class="row2">
@@ -66,6 +66,7 @@
               {{ form.password }}
               <button type="button" class="pw-toggle" data-target="id_password" aria-label="Show password">👁</button>
             </div>
+            {% for e in form.password.errors %}<div class="field-error">{{e}}</div>{% endfor %}
           </div>
           <div class="field">
             <label>Confirm password</label>
@@ -73,6 +74,7 @@
               {{ form.password_confirm }}
               <button type="button" class="pw-toggle" data-target="id_password_confirm" aria-label="Show password">👁</button>
             </div>
+            {% for e in form.password_confirm.errors %}<div class="field-error">{{e}}</div>{% endfor %}
           </div>
         </div>
       </div>
@@ -81,7 +83,7 @@
         <h2>Business details</h2>
         <div class="row2">
           <div class="field">
-            <label>Company / Business Name <span class="required-badge">Required</span></label>
+            <label>Company / Business Name <span style="color:var(--muted);font-weight:400">(optional — leave blank if you work as an individual contractor)</span></label>
             {{ form.business_name }}
             {% for e in form.business_name.errors %}<div class="field-error">{{e}}</div>{% endfor %}
           </div>

@@ -42,6 +42,10 @@
         <form method="post" action="{% url 'market_order_respond' order.pk 'accept' %}">{% csrf_token %}<button type="submit" class="btn btn-success btn-sm">Accept</button></form>
         <form method="post" action="{% url 'market_order_respond' order.pk 'decline' %}">{% csrf_token %}<button type="submit" class="btn btn-sm" style="background:#fdf2ec;color:#c0392b;">Decline</button></form>
       </div>
+      {% elif order.status == 'accepted' %}
+      <div class="order-actions">
+        <form method="post" action="{% url 'market_order_respond' order.pk 'fulfill' %}">{% csrf_token %}<button type="submit" class="btn btn-success btn-sm">Mark fulfilled</button></form>
+      </div>
       {% endif %}
     </div>
     {% empty %}

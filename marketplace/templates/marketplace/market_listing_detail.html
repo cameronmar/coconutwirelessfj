@@ -29,7 +29,7 @@
       <div class="sect-card" style="margin-top:16px;">
         <h1 style="margin:0 0 6px;font-size:1.4rem;">{{ listing.title }}</h1>
         <div class="chip chip-open" style="margin-bottom:10px;display:inline-block;">{{ listing.get_category_display }}{% if listing.food_type %} · {{ listing.get_food_type_display }}{% endif %}</div>
-        <p style="color:var(--muted);">Sold by <a href="{% url 'tradie_profile' listing.seller.pk %}">{{ listing.seller.full_name }}</a></p>
+        <p style="color:var(--muted);">Sold by {% if listing.seller.role == 'tradie' %}<a href="{% url 'tradie_profile' listing.seller.pk %}">{{ listing.seller.full_name }}</a>{% else %}{{ listing.seller.full_name }}{% endif %}</p>
         <p class="desc-text">{{ listing.description }}</p>
         <div class="det-row"><span class="lbl">Price per unit</span><span>FJD ${{ listing.price_per_unit }}</span></div>
         <div class="det-row"><span class="lbl">Units remaining</span><span>{{ listing.units_remaining }}</span></div>

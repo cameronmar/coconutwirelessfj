@@ -85,7 +85,7 @@ class TradieRegistrationForm(forms.Form):
     password         = forms.CharField(widget=forms.PasswordInput(attrs={'class': 'form-input', 'placeholder': 'At least 8 characters'}))
     password_confirm = forms.CharField(label='Confirm password', widget=forms.PasswordInput(attrs={'class': 'form-input', 'placeholder': 'Repeat password'}))
     # Provider profile
-    business_name    = forms.CharField(max_length=100, label='Company / Business Name', widget=_input('e.g. Tora Plumbing Suva'))
+    business_name    = forms.CharField(max_length=100, required=False, label='Company / Business Name', widget=_input('e.g. Tora Plumbing Suva (leave blank if you work as an individual contractor)'))
     tin              = forms.CharField(max_length=50, required=False, label='TIN Number (optional)', widget=_input('e.g. P033-12345'))
     years_experience = forms.ChoiceField(choices=[('', 'Select…')] + list(EXPERIENCE_CHOICES), widget=_select())
     bio              = forms.CharField(widget=forms.Textarea(attrs={'class': 'form-input', 'rows': 4, 'placeholder': 'Tell clients about your experience, specialties and work area…'}))
@@ -363,7 +363,7 @@ class QuotingAppointmentForm(forms.Form):
 
 class MessageForm(forms.Form):
     body = forms.CharField(
-        widget=forms.Textarea(attrs={'class': 'form-input', 'rows': 2, 'placeholder': 'Type a message…'})
+        widget=forms.Textarea(attrs={'class': 'form-input', 'rows': 2, 'placeholder': 'Type a message…', 'required': 'required'})
     )
 
 
@@ -595,6 +595,11 @@ class MarketOrderForm(forms.Form):
             today = timezone.localdate().isoformat()
             future_dates = [d for d in listing.available_dates if d >= today]
             self.fields['requested_date'].choices = [(d, d) for d in future_dates]
+            if listing.delivery_towns:
+                town_labels = dict(TOWN_CHOICES)
+                self.fields['delivery_town'].choices = [('', '—')] + [
+                    (t, town_labels.get(t, t)) for t in listing.delivery_towns
+                ]
             if listing.fulfillment_method == MarketListing.FULFILLMENT_BOTH:
                 # A single order is pickup OR delivery, never "both" — that
                 # choice only makes sense at the listing level, offering
