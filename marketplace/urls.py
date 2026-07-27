@@ -13,6 +13,8 @@ urlpatterns = [
     path('register/tradie/',       views.register_tradie,  name='register_tradie'),
     path('login/',                 views.login_view,    name='login'),
     path('logout/',                views.logout_view,   name='logout'),
+    path('password-reset/',        views.password_reset_request, name='password_reset_request'),
+    path('password-reset/<str:uidb64>/<str:token>/', views.password_reset_confirm, name='password_reset_confirm'),
     path('dashboard/',             views.dashboard,     name='dashboard'),
     # Dashboards
     path('dashboard/client/',      views.client_dashboard, name='client_dashboard'),

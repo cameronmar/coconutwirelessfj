@@ -183,11 +183,29 @@ class LoginForm(forms.Form):
     password = forms.CharField(widget=forms.PasswordInput(attrs={'class': 'form-input', 'placeholder': 'Your password'}))
 
 
+class PasswordResetRequestForm(forms.Form):
+    email = forms.EmailField(widget=_input('you@example.fj', type_='email'))
+
+
+class SetNewPasswordForm(forms.Form):
+    password         = forms.CharField(label='New password', widget=forms.PasswordInput(attrs={'class': 'form-input', 'placeholder': 'At least 8 characters'}))
+    password_confirm = forms.CharField(label='Confirm new password', widget=forms.PasswordInput(attrs={'class': 'form-input', 'placeholder': 'Repeat new password'}))
+
+    def clean(self):
+        cd = super().clean()
+        p1, p2 = cd.get('password'), cd.get('password_confirm')
+        if p1 and p2 and p1 != p2:
+            raise ValidationError('Passwords do not match.')
+        if p1 and len(p1) < 8:
+            raise ValidationError('Password must be at least 8 characters.')
+        return cd
+
+
 # ── Task form ─────────────────────────────────────────────────────────────────
 
 class TaskForm(forms.ModelForm):
     category = forms.ChoiceField(
-        choices=[], required=False, widget=forms.Select(attrs={'class': 'form-input'})
+        choices=[], widget=forms.Select(attrs={'class': 'form-input'})
     )
     categories = forms.ModelMultipleChoiceField(
         queryset=TradeCategory.objects.filter(active=True).order_by('name'),

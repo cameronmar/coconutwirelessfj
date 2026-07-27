@@ -8,7 +8,8 @@
 .form-card{background:var(--white);border-radius:16px;box-shadow:0 4px 18px rgba(0,80,120,.08);padding:24px;margin-bottom:18px;}
 .form-card h2{font-size:1rem;color:var(--blue);margin:0 0 16px;padding-bottom:9px;border-bottom:1px solid var(--blue-light);}
 .cat-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(128px,1fr));gap:8px;}
-.cat-chip{display:flex;align-items:center;gap:7px;padding:9px 12px;border:1.5px solid #cce4ef;border-radius:10px;cursor:pointer;font-size:.84rem;background:var(--white);transition:all .2s;}
+.cat-chip{display:flex;align-items:center;gap:7px;padding:9px 12px;border:1.5px solid #cce4ef;border-radius:10px;cursor:pointer;font-size:.84rem;font-family:inherit;background:var(--white);transition:all .2s;text-align:left;}
+.cat-chip:focus-visible{outline:2px solid var(--blue);outline-offset:2px;}
 .cat-chip:hover,.cat-chip.sel{border-color:var(--blue);background:var(--blue-light);color:var(--blue);font-weight:600;}
 .multi-cat-grid div{display:contents;}
 .multi-cat-grid label{display:flex;align-items:center;gap:7px;padding:9px 12px;border:1.5px solid #cce4ef;border-radius:10px;cursor:pointer;font-size:.84rem;background:var(--white);transition:all .2s;}
@@ -45,13 +46,13 @@
             <div class="hint">Be specific — it helps local professionals give accurate quotes.</div>
           </div>
           <div class="field">
-            <label>Category</label>
-            <div class="cat-grid" id="catGrid">
+            <label id="catLabel">Category</label>
+            <div class="cat-grid" id="catGrid" role="radiogroup" aria-labelledby="catLabel">
               {% for val, label in category_choices %}
-              <div class="cat-chip {% if form.category.value == val %}sel{% endif %}" onclick="pickCat('{{ val }}',this)">{{ label }}</div>
+              <button type="button" class="cat-chip {% if form.category.value == val %}sel{% endif %}" role="radio" aria-checked="{% if form.category.value == val %}true{% else %}false{% endif %}" onclick="pickCat('{{ val }}',this)">{{ label }}</button>
               {% endfor %}
             </div>
-            <input type="hidden" name="category" id="catInput" value="{{ form.category.value|default:'' }}" required>
+            <input type="hidden" name="category" id="catInput" value="{{ form.category.value|default:'' }}">
             {% for e in form.category.errors %}<div class="field-error">{{e}}</div>{% endfor %}
           </div>
           <div class="field">
@@ -149,8 +150,12 @@
 {% block scripts %}
 <script>
 function pickCat(val, el){
-  document.querySelectorAll('.cat-chip').forEach(c=>c.classList.remove('sel'));
+  document.querySelectorAll('.cat-chip').forEach(function(c){
+    c.classList.remove('sel');
+    c.setAttribute('aria-checked', 'false');
+  });
   el.classList.add('sel');
+  el.setAttribute('aria-checked', 'true');
   document.getElementById('catInput').value=val;
 }
 </script>

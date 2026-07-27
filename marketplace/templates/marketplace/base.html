@@ -15,7 +15,8 @@
 <header>
   <div class="hdr">
     <a href="{% url 'home' %}" class="brand">The Coconut<span>Wireless Network</span></a>
-    <nav>
+    <button type="button" class="nav-toggle" id="navToggle" aria-label="Menu" aria-expanded="false" aria-controls="mainNav">☰</button>
+    <nav id="mainNav">
       <a href="{% url 'browse_tasks' %}">Browse Tasks</a>
       <a href="{% url 'browse_tradies' %}">Find a Local Professional</a>
       <a href="{% url 'market_browse' %}">Market</a>
@@ -34,6 +35,17 @@
     </nav>
   </div>
 </header>
+<script>
+(function(){
+  var toggle = document.getElementById('navToggle');
+  var nav = document.getElementById('mainNav');
+  if (!toggle || !nav) return;
+  toggle.addEventListener('click', function(){
+    var open = nav.classList.toggle('nav-open');
+    toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+  });
+})();
+</script>
 
 {% if messages %}
 <div class="flash-wrap">

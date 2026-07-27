@@ -48,7 +48,7 @@ body,html{height:100%;}
 .empty-state{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--muted);}
 .empty-state .icon{font-size:2.8rem;margin-bottom:11px;}
 footer{display:none;}
-@media(max-width:680px){.chat-page{grid-template-columns:1fr;}.conv-col{height:200px;}}
+@media(max-width:680px){.chat-page{grid-template-columns:1fr;grid-template-rows:200px 1fr;}.conv-col{height:200px;min-height:0;}.chat-col{min-height:0;}}
 </style>
 {% endblock %}
 
@@ -58,7 +58,8 @@ footer{display:none;}
   <!-- Conversation list -->
   <div class="conv-col">
     <div class="conv-search">
-      <input type="text" placeholder="Search conversations…" oninput="filterConvs(this.value)">
+      <label for="convSearchInput" class="sr-only">Search conversations</label>
+      <input type="text" id="convSearchInput" placeholder="Search conversations…" oninput="filterConvs(this.value)">
     </div>
     <div class="conv-list" id="convList">
       {% for c in conversations %}

@@ -175,6 +175,9 @@ class TradieProfile(models.Model):
             return False
         if self.requires_safety_document_review() and not self.safety_documents_reviewed:
             return False
+        from .utils import is_tradie_payment_restricted  # deferred: utils imports models
+        if is_tradie_payment_restricted(self.user):
+            return False
         return True
 
     def quote_block_reason(self):
@@ -188,6 +191,12 @@ class TradieProfile(models.Model):
                 'Electrical and Plumbing work is safety-critical, so we need to review your licence '
                 "documents before you can bid on jobs. If you haven't already sent them, please "
                 'contact support — our team will review them and enable bidding shortly.'
+            )
+        from .utils import is_tradie_payment_restricted  # deferred: utils imports models
+        if is_tradie_payment_restricted(self.user):
+            return (
+                'You have an invoice more than 14 days overdue. Please settle your outstanding '
+                'balance from the Billing page before submitting new quotes.'
             )
         return ''
 

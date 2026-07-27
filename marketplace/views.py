@@ -35,11 +35,13 @@ from .forms import (
     MarketOrderForm,
     MessageForm,
     NotificationPreferencesForm,
+    PasswordResetRequestForm,
     PrivateReviewForm,
     PublicReviewForm,
     QuoteForm,
     QuotingAppointmentForm,
     ServiceAreaForm,
+    SetNewPasswordForm,
     TaskForm,
     TradieRegistrationForm,
 )
@@ -345,6 +347,75 @@ def login_view(request):
 def logout_view(request):
     logout(request)
     return redirect('home')
+
+
+def password_reset_request(request):
+    """
+    Deliberately shows the same success message whether or not the email
+    matches an account, so this can't be used to enumerate registered
+    emails. Uses Django's own token generator (User already extends
+    AbstractUser) rather than inventing a new token scheme — the token is
+    automatically invalidated once the password actually changes, since
+    it's derived in part from the password hash.
+    """
+    if request.user.is_authenticated:
+        return redirect('dashboard')
+    form = PasswordResetRequestForm(request.POST or None)
+    if request.method == 'POST' and form.is_valid():
+        email = form.cleaned_data['email'].lower()
+        user = User.objects.filter(email=email).first()
+        if user and user.is_active:
+            from django.contrib.auth.tokens import default_token_generator
+            from django.utils.encoding import force_bytes
+            from django.utils.http import urlsafe_base64_encode
+            from django.core.mail import send_mail
+
+            uidb64 = urlsafe_base64_encode(force_bytes(user.pk))
+            token = default_token_generator.make_token(user)
+            reset_url = request.build_absolute_uri(
+                reverse('password_reset_confirm', args=[uidb64, token])
+            )
+            send_mail(
+                subject='Reset your Coconut Wireless Network password',
+                message=(
+                    f'Bula {user.first_name},\n\n'
+                    f'Someone (hopefully you) requested a password reset for your account.\n\n'
+                    f'Reset your password here: {reset_url}\n\n'
+                    f"This link works once and expires after a while for your security. "
+                    f"If you didn't request this, you can safely ignore this email.\n\n"
+                    f'Vinaka,\nThe Coconut Wireless Network Team'
+                ),
+                from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@coconutwireless.fj'),
+                recipient_list=[user.email],
+                fail_silently=True,
+            )
+        flash.success(request, "If that email is registered, we've sent a password reset link to it.")
+        return redirect('login')
+    return render(request, 'marketplace/password_reset_request.html', {'form': form})
+
+
+def password_reset_confirm(request, uidb64, token):
+    from django.contrib.auth.tokens import default_token_generator
+    from django.utils.encoding import force_str
+    from django.utils.http import urlsafe_base64_decode
+
+    try:
+        uid = force_str(urlsafe_base64_decode(uidb64))
+        user = User.objects.get(pk=uid)
+    except (TypeError, ValueError, OverflowError, User.DoesNotExist):
+        user = None
+
+    if user is None or not default_token_generator.check_token(user, token):
+        flash.error(request, 'This password reset link is invalid or has expired. Please request a new one.')
+        return redirect('password_reset_request')
+
+    form = SetNewPasswordForm(request.POST or None)
+    if request.method == 'POST' and form.is_valid():
+        user.set_password(form.cleaned_data['password'])
+        user.save(update_fields=['password'])
+        flash.success(request, 'Your password has been reset. You can now log in.')
+        return redirect('login')
+    return render(request, 'marketplace/password_reset_confirm.html', {'form': form})
 
 
 @login_required

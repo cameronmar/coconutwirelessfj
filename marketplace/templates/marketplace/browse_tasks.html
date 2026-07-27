@@ -36,14 +36,17 @@
 <div class="search-bar">
   <div class="container">
     <form class="s-inner" method="get" action="{% url 'browse_tasks' %}">
-      <input type="text" name="q" placeholder="Search tasks by keyword…" value="{{ keyword_filter }}">
-      <select name="category">
+      <label for="taskSearchQ" class="sr-only">Search tasks by keyword</label>
+      <input type="text" name="q" id="taskSearchQ" placeholder="Search tasks by keyword…" value="{{ keyword_filter }}">
+      <label for="taskSearchCategory" class="sr-only">Category</label>
+      <select name="category" id="taskSearchCategory">
         <option value="">All categories</option>
         {% for val, label in category_choices %}
           <option value="{{ val }}" {% if val == category_filter %}selected{% endif %}>{{ label }}</option>
         {% endfor %}
       </select>
-      <select name="town">
+      <label for="taskSearchTown" class="sr-only">Town</label>
+      <select name="town" id="taskSearchTown">
         <option value="">All towns</option>
         {% for val, label in town_choices %}
           <option value="{{ val }}" {% if val == town_filter %}selected{% endif %}>{{ label }}</option>

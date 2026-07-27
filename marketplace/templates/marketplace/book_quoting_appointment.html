@@ -27,22 +27,22 @@
     <form method="post">
       {% csrf_token %}
       <div class="field">
-        <label>Appointment note (optional)</label>
+        <label for="id_appointment_note">Appointment note (optional)</label>
         {{ form.appointment_note }}
       </div>
 
       <h2 style="margin-top:0.5rem;">Option 1</h2>
       <div class="slot-grid">
         <div class="field">
-          <label>Date</label>
+          <label for="id_slot_1_date">Date</label>
           {{ form.slot_1_date }}
         </div>
         <div class="field">
-          <label>Start time</label>
+          <label for="id_slot_1_start">Start time</label>
           {{ form.slot_1_start }}
         </div>
         <div class="field">
-          <label>End time</label>
+          <label for="id_slot_1_end">End time</label>
           {{ form.slot_1_end }}
         </div>
       </div>
@@ -50,15 +50,15 @@
       <h2>Option 2</h2>
       <div class="slot-grid">
         <div class="field">
-          <label>Date</label>
+          <label for="id_slot_2_date">Date</label>
           {{ form.slot_2_date }}
         </div>
         <div class="field">
-          <label>Start time</label>
+          <label for="id_slot_2_start">Start time</label>
           {{ form.slot_2_start }}
         </div>
         <div class="field">
-          <label>End time</label>
+          <label for="id_slot_2_end">End time</label>
           {{ form.slot_2_end }}
         </div>
       </div>
@@ -66,15 +66,15 @@
       <h2>Option 3</h2>
       <div class="slot-grid">
         <div class="field">
-          <label>Date</label>
+          <label for="id_slot_3_date">Date</label>
           {{ form.slot_3_date }}
         </div>
         <div class="field">
-          <label>Start time</label>
+          <label for="id_slot_3_start">Start time</label>
           {{ form.slot_3_start }}
         </div>
         <div class="field">
-          <label>End time</label>
+          <label for="id_slot_3_end">End time</label>
           {{ form.slot_3_end }}
         </div>
       </div>

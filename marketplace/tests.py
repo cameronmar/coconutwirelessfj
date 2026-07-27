@@ -792,3 +792,180 @@ class MarketListingClientSellerProfileLinkTests(TestCase):
         template_path = PROJECT_ROOT / 'marketplace' / 'templates' / 'marketplace' / 'market_listing_detail.html'
         content = template_path.read_text(encoding='utf-8')
         self.assertIn("if listing.seller.role == 'tradie'", content)
+
+
+class PaymentRestrictionEnforcementTests(TestCase):
+    """utils.is_tradie_payment_restricted() already existed and billing.html
+    already warned about it, but nothing actually enforced it — can_quote()/
+    quote_block_reason() never called it. Wires it in."""
+
+    def setUp(self):
+        self.client_user = User.objects.create_user(
+            email='pr-client@example.com', password='pass12345',
+            first_name='Client', last_name='User', role=User.ROLE_CLIENT, town='Suva',
+        )
+        self.tradie_user = User.objects.create_user(
+            email='pr-tradie@example.com', password='pass12345',
+            first_name='Tradie', last_name='User', role=User.ROLE_TRADIE, town='Suva',
+        )
+        self.tradie_profile = TradieProfile.objects.create(
+            user=self.tradie_user, trades=['cleaning'], service_towns=['Suva'],
+            verification_status=TradieProfile.VERIFICATION_APPROVED,
+        )
+        self.task = Task.objects.create(
+            client=self.client_user, title='Fix sink', category='plumbing',
+            description='Kitchen sink leaking', budget=Decimal('150.00'), town='Suva',
+        )
+
+    def test_tradie_with_old_overdue_invoice_cannot_quote(self):
+        from datetime import timedelta
+        from django.utils import timezone
+        Invoice.objects.create(
+            tradie=self.tradie_user, invoice_number='INV-OVERDUE-1',
+            total_amount=Decimal('50.00'), status=Invoice.STATUS_OVERDUE,
+            due_date=timezone.localdate() - timedelta(days=20),
+        )
+        self.assertFalse(self.tradie_profile.can_quote())
+        self.assertIn('overdue', self.tradie_profile.quote_block_reason())
+
+        self.client.login(username=self.tradie_user.email, password='pass12345')
+        response = self.client.post(
+            reverse('submit_quote', args=[self.task.pk]),
+            {'price': '120.00', 'message': 'Can do', 'quote_includes': 'labour_only'},
+            secure=True,
+        )
+        self.assertRedirects(response, reverse('tradie_dashboard'), fetch_redirect_response=False)
+        self.assertFalse(Quote.objects.filter(task=self.task, tradie=self.tradie_user).exists())
+
+    def test_tradie_with_recent_overdue_invoice_can_still_quote(self):
+        from datetime import timedelta
+        from django.utils import timezone
+        Invoice.objects.create(
+            tradie=self.tradie_user, invoice_number='INV-RECENT-1',
+            total_amount=Decimal('50.00'), status=Invoice.STATUS_OVERDUE,
+            due_date=timezone.localdate() - timedelta(days=5),
+        )
+        self.assertTrue(self.tradie_profile.can_quote())
+        self.assertEqual(self.tradie_profile.quote_block_reason(), '')
+
+
+class PasswordResetFlowTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email='resetme@example.com', password='OldPass123',
+            first_name='Reset', last_name='Me', role=User.ROLE_CLIENT, town='Suva',
+        )
+
+    def _extract_reset_url(self, body):
+        for line in body.splitlines():
+            if 'password-reset' in line and 'http' in line:
+                return line.split('here: ', 1)[-1].strip()
+        return None
+
+    def test_request_for_existing_email_sends_email_with_working_link(self):
+        from django.core import mail
+        response = self.client.post(reverse('password_reset_request'), {'email': 'resetme@example.com'}, secure=True)
+        self.assertRedirects(response, reverse('login'), fetch_redirect_response=False)
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertIn(self.user.email, mail.outbox[0].to)
+        reset_url = self._extract_reset_url(mail.outbox[0].body)
+        self.assertIsNotNone(reset_url)
+
+        confirm_response = self.client.post(reset_url, {'password': 'BrandNewPass456', 'password_confirm': 'BrandNewPass456'}, secure=True)
+        self.assertRedirects(confirm_response, reverse('login'), fetch_redirect_response=False)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.check_password('BrandNewPass456'))
+        self.assertFalse(self.user.check_password('OldPass123'))
+
+    def test_request_for_unknown_email_gives_same_response_and_sends_nothing(self):
+        from django.core import mail
+        response = self.client.post(reverse('password_reset_request'), {'email': 'nobody@example.com'}, secure=True)
+        self.assertRedirects(response, reverse('login'), fetch_redirect_response=False)
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_invalid_token_is_rejected(self):
+        from django.utils.encoding import force_bytes
+        from django.utils.http import urlsafe_base64_encode
+        uidb64 = urlsafe_base64_encode(force_bytes(self.user.pk))
+        response = self.client.post(
+            reverse('password_reset_confirm', args=[uidb64, 'bogus-token']),
+            {'password': 'BrandNewPass456', 'password_confirm': 'BrandNewPass456'},
+            secure=True,
+        )
+        self.assertRedirects(response, reverse('password_reset_request'), fetch_redirect_response=False)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.check_password('OldPass123'))
+
+    def test_token_cannot_be_reused_after_password_already_changed(self):
+        from django.contrib.auth.tokens import default_token_generator
+        from django.utils.encoding import force_bytes
+        from django.utils.http import urlsafe_base64_encode
+        uidb64 = urlsafe_base64_encode(force_bytes(self.user.pk))
+        token = default_token_generator.make_token(self.user)
+
+        first = self.client.post(
+            reverse('password_reset_confirm', args=[uidb64, token]),
+            {'password': 'FirstNewPass789', 'password_confirm': 'FirstNewPass789'},
+            secure=True,
+        )
+        self.assertRedirects(first, reverse('login'), fetch_redirect_response=False)
+
+        second = self.client.post(
+            reverse('password_reset_confirm', args=[uidb64, token]),
+            {'password': 'SecondNewPass000', 'password_confirm': 'SecondNewPass000'},
+            secure=True,
+        )
+        self.assertRedirects(second, reverse('password_reset_request'), fetch_redirect_response=False)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.check_password('FirstNewPass789'))
+
+    def test_mismatched_new_passwords_rejected(self):
+        # Form-level, not self.client: a validation failure re-renders
+        # password_reset_confirm.html, which hits the same pre-existing
+        # Python 3.14 test-instrumentation crash as other rendered
+        # templates in this local environment (see other tests in this
+        # file for the same limitation).
+        from .forms import SetNewPasswordForm
+        form = SetNewPasswordForm({'password': 'OneThing123', 'password_confirm': 'AnotherThing456'})
+        self.assertFalse(form.is_valid())
+
+    def test_too_short_new_password_rejected(self):
+        from .forms import SetNewPasswordForm
+        form = SetNewPasswordForm({'password': 'short', 'password_confirm': 'short'})
+        self.assertFalse(form.is_valid())
+
+
+class TaskCategoryRequiredTests(TestCase):
+    """post_task.html's category chip picker sets a plain hidden input,
+    which browsers never enforce `required` on — so category was
+    previously only enforced by the client-side chip click, not the
+    server. TaskForm.category is now actually required=True (Django's
+    ChoiceField default)."""
+
+    def setUp(self):
+        self.client_user = User.objects.create_user(
+            email='catreq-client@example.com', password='pass12345',
+            first_name='Client', last_name='User', role=User.ROLE_CLIENT, town='Suva',
+        )
+
+    def test_posting_a_task_without_category_is_rejected(self):
+        from .forms import TaskForm
+        form = TaskForm(data={
+            'title': 'Fix sink', 'category': '', 'description': 'Leaking',
+            'budget': '150.00', 'town': 'Suva', 'urgency': 'this_week', 'budget_type': 'fixed',
+        })
+        self.assertFalse(form.is_valid())
+        self.assertIn('category', form.errors)
+
+    def test_posting_a_task_with_category_succeeds(self):
+        self.client.login(username=self.client_user.email, password='pass12345')
+        response = self.client.post(
+            reverse('post_task'),
+            {
+                'title': 'Fix sink', 'category': 'plumbing', 'description': 'Leaking',
+                'budget': '150.00', 'town': 'Suva', 'urgency': 'this_week', 'budget_type': 'fixed',
+            },
+            secure=True,
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(Task.objects.filter(title='Fix sink', category='plumbing').exists())

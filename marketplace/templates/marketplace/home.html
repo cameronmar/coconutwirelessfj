@@ -42,8 +42,10 @@
     <div class="hero-image" style="background-image:url('{% static 'marketplace/images/01_connecting_fiji_building_together.png' %}')" role="img" aria-label="Connecting Fiji, Building Together — the Coconut Wireless Network connects locals with trusted local professionals to get the job done, the Fijian way"></div>
     <div class="search-card">
       <form action="{% url 'browse_tasks' %}" method="get">
-        <input type="text" name="q" placeholder="What service do you need?">
-        <select name="town">
+        <label for="homeSearchQ" class="sr-only">What service do you need?</label>
+        <input type="text" name="q" id="homeSearchQ" placeholder="What service do you need?">
+        <label for="homeSearchTown" class="sr-only">Town</label>
+        <select name="town" id="homeSearchTown">
           <option value="">All towns</option>
           <option>Suva</option>
           <option>Nadi</option>

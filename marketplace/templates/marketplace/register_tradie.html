@@ -51,17 +51,17 @@
       <div class="form-card">
         <h2>Personal details</h2>
         <div class="row2">
-          <div class="field"><label>First name</label>{{ form.first_name }}{% for e in form.first_name.errors %}<div class="field-error">{{e}}</div>{% endfor %}</div>
-          <div class="field"><label>Last name</label>{{ form.last_name }}{% for e in form.last_name.errors %}<div class="field-error">{{e}}</div>{% endfor %}</div>
+          <div class="field"><label for="id_first_name">First name</label>{{ form.first_name }}{% for e in form.first_name.errors %}<div class="field-error">{{e}}</div>{% endfor %}</div>
+          <div class="field"><label for="id_last_name">Last name</label>{{ form.last_name }}{% for e in form.last_name.errors %}<div class="field-error">{{e}}</div>{% endfor %}</div>
         </div>
-        <div class="field"><label>Email address</label>{{ form.email }}{% for e in form.email.errors %}<div class="field-error">{{e}}</div>{% endfor %}</div>
+        <div class="field"><label for="id_email">Email address</label>{{ form.email }}{% for e in form.email.errors %}<div class="field-error">{{e}}</div>{% endfor %}</div>
         <div class="row2">
-          <div class="field"><label>Mobile</label>{{ form.mobile }}{% for e in form.mobile.errors %}<div class="field-error">{{e}}</div>{% endfor %}</div>
-          <div class="field"><label>Town / Service Area</label>{{ form.town }}{% for e in form.town.errors %}<div class="field-error">{{e}}</div>{% endfor %}</div>
+          <div class="field"><label for="id_mobile">Mobile</label>{{ form.mobile }}{% for e in form.mobile.errors %}<div class="field-error">{{e}}</div>{% endfor %}</div>
+          <div class="field"><label for="id_town">Town / Service Area</label>{{ form.town }}{% for e in form.town.errors %}<div class="field-error">{{e}}</div>{% endfor %}</div>
         </div>
         <div class="row2">
           <div class="field">
-            <label>Password</label>
+            <label for="id_password">Password</label>
             <div class="pw-wrap">
               {{ form.password }}
               <button type="button" class="pw-toggle" data-target="id_password" aria-label="Show password">👁</button>
@@ -69,7 +69,7 @@
             {% for e in form.password.errors %}<div class="field-error">{{e}}</div>{% endfor %}
           </div>
           <div class="field">
-            <label>Confirm password</label>
+            <label for="id_password_confirm">Confirm password</label>
             <div class="pw-wrap">
               {{ form.password_confirm }}
               <button type="button" class="pw-toggle" data-target="id_password_confirm" aria-label="Show password">👁</button>
