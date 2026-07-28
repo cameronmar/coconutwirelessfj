@@ -1492,3 +1492,45 @@ class InvoiceResendGuardTests(TestCase):
         model_admin = InvoiceAdmin(Invoice, None)
         model_admin.send_invoices_action(request, Invoice.objects.filter(pk=self.invoice.pk))
         self.assertFalse(self.invoice.notifications.exists())
+
+
+class TermsAcceptanceReportTests(TestCase):
+    """Covers the UserAdmin report added to surface accounts with no
+    TermsAcceptance record — either a legacy pre-tracking account, or one
+    created directly via the admin's "Add user" button, which (unlike the
+    public registration forms) has no terms checkbox at all."""
+
+    def setUp(self):
+        from marketplace.models import TermsAcceptance
+        self.with_terms = User.objects.create_user(
+            email='hasterms@example.com', password='pass12345',
+            first_name='Has', last_name='Terms', role=User.ROLE_CLIENT, town='Suva',
+        )
+        TermsAcceptance.objects.create(user=self.with_terms, terms_version='1.0')
+        self.without_terms = User.objects.create_user(
+            email='noterms@example.com', password='pass12345',
+            first_name='No', last_name='Terms', role=User.ROLE_CLIENT, town='Suva',
+        )
+
+    def test_annotation_correctly_flags_each_account(self):
+        from django.contrib.admin.sites import site
+        from marketplace.admin import UserAdmin
+        from django.test import RequestFactory
+        request = RequestFactory().get('/admin/marketplace/user/')
+        request.user = self.with_terms
+        qs = UserAdmin(User, site).get_queryset(request)
+        self.assertTrue(qs.get(pk=self.with_terms.pk).has_accepted_terms)
+        self.assertFalse(qs.get(pk=self.without_terms.pk).has_accepted_terms)
+
+    def test_filter_scopes_to_accounts_missing_terms(self):
+        # Goes through the real admin changelist machinery (not a
+        # hand-built filter instance) so the query string is parsed the
+        # same way an actual admin page request would.
+        from marketplace.admin import UserAdmin
+        from django.contrib.admin.sites import site
+        from django.test import RequestFactory
+        request = RequestFactory().get('/admin/marketplace/user/', {'accepted_terms': 'no'})
+        request.user = self.with_terms
+        model_admin = UserAdmin(User, site)
+        changelist = model_admin.get_changelist_instance(request)
+        self.assertEqual(set(changelist.get_queryset(request).values_list('pk', flat=True)), {self.without_terms.pk})

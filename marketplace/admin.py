@@ -10,7 +10,7 @@ from django.contrib import admin, messages
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
-from django.db.models import F, Q
+from django.db.models import Exists, F, OuterRef, Q
 from django.db.models.functions import Greatest
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import path, reverse
@@ -56,11 +56,32 @@ from .utils import (
 
 # ── User ──────────────────────────────────────────────────────────────────────
 
+class HasAcceptedTermsFilter(admin.SimpleListFilter):
+    """Surfaces accounts with zero TermsAcceptance records — either a
+    legacy account that registered before that tracking existed (see
+    migration 0010), or one created directly via this admin's "Add user"
+    button, which (unlike the public registration forms) has no terms
+    checkbox and never writes this record. Both cases end up looking the
+    same here; there's no way to tell them apart from this data alone."""
+    title = 'accepted terms'
+    parameter_name = 'accepted_terms'
+
+    def lookups(self, request, model_admin):
+        return (('yes', 'Accepted'), ('no', 'Not accepted / no record'))
+
+    def queryset(self, request, queryset):
+        if self.value() == 'yes':
+            return queryset.filter(has_accepted_terms=True)
+        if self.value() == 'no':
+            return queryset.filter(has_accepted_terms=False)
+        return queryset
+
+
 @admin.register(User)
 class UserAdmin(BaseUserAdmin):
     ordering = ['email']
-    list_display = ['email', 'first_name', 'last_name', 'role', 'town', 'is_market_founding_member', 'is_active', 'date_joined', 'migrate_link']
-    list_filter  = ['role', 'town', 'is_market_founding_member', 'is_active']
+    list_display = ['email', 'first_name', 'last_name', 'role', 'town', 'is_market_founding_member', 'is_active', 'date_joined', 'accepted_terms_display', 'migrate_link']
+    list_filter  = ['role', 'town', 'is_market_founding_member', 'is_active', HasAcceptedTermsFilter]
     search_fields = ['email', 'first_name', 'last_name']
     fieldsets = (
         (None,           {'fields': ('email', 'password')}),
@@ -78,8 +99,19 @@ class UserAdmin(BaseUserAdmin):
 
     def get_queryset(self, request):
         # migrate_link()'s hasattr(obj, 'tradie_profile') check would
-        # otherwise run one query per row on this (the busiest) changelist.
-        return super().get_queryset(request).select_related('tradie_profile')
+        # otherwise run one query per row on this (the busiest) changelist;
+        # has_accepted_terms likewise avoids a query-per-row for the new
+        # column/filter above.
+        return (
+            super().get_queryset(request)
+            .select_related('tradie_profile')
+            .annotate(has_accepted_terms=Exists(TermsAcceptance.objects.filter(user=OuterRef('pk'))))
+        )
+
+    def accepted_terms_display(self, obj):
+        return '✅' if obj.has_accepted_terms else '❌'
+    accepted_terms_display.short_description = 'Terms'
+    accepted_terms_display.admin_order_field = 'has_accepted_terms'
 
     def migrate_link(self, obj):
         from django.utils.html import format_html
