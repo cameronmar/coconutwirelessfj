@@ -44,6 +44,7 @@ from .forms import (
     QuotingAppointmentForm,
     ServiceAreaForm,
     SetNewPasswordForm,
+    TaskDateForm,
     TaskForm,
     TradieRegistrationForm,
 )
@@ -722,6 +723,24 @@ def post_task(request):
     })
 
 
+_EDITABLE_DATE_STATUSES = (Task.STATUS_OPEN, Task.STATUS_ASSIGNED, Task.STATUS_IN_PROGRESS)
+
+
+@login_required
+def edit_task_dates(request, pk):
+    _require_task_poster(request)
+    task = get_object_or_404(Task, pk=pk, client=request.user)
+    if task.status not in _EDITABLE_DATE_STATUSES:
+        flash.error(request, "This job's dates can no longer be changed.")
+        return redirect('task_detail', pk=pk)
+    form = TaskDateForm(request.POST or None, instance=task)
+    if request.method == 'POST' and form.is_valid():
+        form.save()
+        flash.success(request, 'Job dates updated.')
+        return redirect('task_detail', pk=pk)
+    return render(request, 'marketplace/edit_task_dates.html', {'form': form, 'task': task})
+
+
 # ── Task detail ───────────────────────────────────────────────────────────────
 
 def task_detail(request, pk):
@@ -756,6 +775,12 @@ def task_detail(request, pk):
                 can_accept = True
             if task.status == Task.STATUS_ASSIGNED:
                 can_complete = True
+
+    can_edit_dates = (
+        request.user.is_authenticated
+        and request.user == task.client
+        and task.status in _EDITABLE_DATE_STATUSES
+    )
 
     appointments = task.quoting_appointments.select_related('provider', 'client', 'selected_slot').prefetch_related('slots').order_by('-created_at')
     can_book_appointment = (
@@ -812,6 +837,7 @@ def task_detail(request, pk):
         'can_quote':       can_quote,
         'can_accept':      can_accept,
         'can_complete':    can_complete,
+        'can_edit_dates':  can_edit_dates,
         'can_rate_tradie': can_rate_tradie,
         'can_rate_client': can_rate_client,
         'client_has_rated': client_has_rated,

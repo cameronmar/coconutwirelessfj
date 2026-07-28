@@ -976,6 +976,138 @@ class TaskCategoryRequiredTests(TestCase):
         self.assertTrue(Task.objects.filter(title='Fix sink', category='plumbing').exists())
 
 
+class TaskDateFieldsTests(TestCase):
+    """A job can have no date, a single date, or a date range. TaskForm's
+    non-model date_type radio drives which of preferred_date /
+    preferred_date_end actually get saved — see _clean_task_dates()."""
+
+    def _base_data(self, **overrides):
+        data = {
+            'title': 'Fix sink', 'category': 'plumbing', 'description': 'Leaking',
+            'budget': '150.00', 'town': 'Suva', 'urgency': 'this_week', 'budget_type': 'fixed',
+        }
+        data.update(overrides)
+        return data
+
+    def test_flexible_clears_any_dates(self):
+        from .forms import TaskForm
+        form = TaskForm(data=self._base_data(date_type='flexible', preferred_date='2026-08-01'))
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertIsNone(form.cleaned_data['preferred_date'])
+        self.assertIsNone(form.cleaned_data['preferred_date_end'])
+
+    def test_single_date_requires_a_date(self):
+        from .forms import TaskForm
+        form = TaskForm(data=self._base_data(date_type='single'))
+        self.assertFalse(form.is_valid())
+
+    def test_single_date_accepted(self):
+        from .forms import TaskForm
+        form = TaskForm(data=self._base_data(date_type='single', preferred_date='2026-08-01'))
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertIsNone(form.cleaned_data['preferred_date_end'])
+
+    def test_range_requires_both_dates(self):
+        from .forms import TaskForm
+        form = TaskForm(data=self._base_data(date_type='range', preferred_date='2026-08-01'))
+        self.assertFalse(form.is_valid())
+
+    def test_range_end_before_start_rejected(self):
+        from .forms import TaskForm
+        form = TaskForm(data=self._base_data(
+            date_type='range', preferred_date='2026-08-10', preferred_date_end='2026-08-01',
+        ))
+        self.assertFalse(form.is_valid())
+
+    def test_range_accepted(self):
+        from .forms import TaskForm
+        form = TaskForm(data=self._base_data(
+            date_type='range', preferred_date='2026-08-01', preferred_date_end='2026-08-05',
+        ))
+        self.assertTrue(form.is_valid(), form.errors)
+
+
+class TaskDateModelDisplayTests(TestCase):
+    def setUp(self):
+        self.client_user = User.objects.create_user(
+            email='datedisp-client@example.com', password='pass12345',
+            first_name='Client', last_name='User', role=User.ROLE_CLIENT, town='Suva',
+        )
+
+    def test_single_date_not_flagged_as_range(self):
+        from datetime import date
+        task = Task.objects.create(
+            client=self.client_user, title='Fix sink', category='plumbing',
+            description='Leak', budget=Decimal('150.00'), town='Suva',
+            preferred_date=date(2026, 8, 1),
+        )
+        self.assertFalse(task.is_date_range)
+        self.assertEqual(task.date_display, date(2026, 8, 1))
+
+    def test_range_is_flagged_and_displayed(self):
+        from datetime import date
+        task = Task.objects.create(
+            client=self.client_user, title='Fix sink', category='plumbing',
+            description='Leak', budget=Decimal('150.00'), town='Suva',
+            preferred_date=date(2026, 8, 1), preferred_date_end=date(2026, 8, 5),
+        )
+        self.assertTrue(task.is_date_range)
+        self.assertEqual(task.date_display, '01 Aug 2026 – 05 Aug 2026')
+
+
+class EditTaskDatesTests(TestCase):
+    def setUp(self):
+        from datetime import date
+        self.client_user = User.objects.create_user(
+            email='editdates-client@example.com', password='pass12345',
+            first_name='Client', last_name='User', role=User.ROLE_CLIENT, town='Suva',
+        )
+        self.other_client = User.objects.create_user(
+            email='editdates-other@example.com', password='pass12345',
+            first_name='Other', last_name='User', role=User.ROLE_CLIENT, town='Suva',
+        )
+        self.task = Task.objects.create(
+            client=self.client_user, title='Fix sink', category='plumbing',
+            description='Leak', budget=Decimal('150.00'), town='Suva',
+            preferred_date=date(2026, 8, 1),
+        )
+
+    def test_owner_can_change_a_single_date_to_a_range(self):
+        from datetime import date
+        self.client.login(username=self.client_user.email, password='pass12345')
+        response = self.client.post(
+            reverse('edit_task_dates', args=[self.task.pk]),
+            {'date_type': 'range', 'preferred_date': '2026-08-01', 'preferred_date_end': '2026-08-05'},
+            secure=True,
+        )
+        self.assertRedirects(response, reverse('task_detail', args=[self.task.pk]), fetch_redirect_response=False)
+        self.task.refresh_from_db()
+        self.assertEqual(self.task.preferred_date_end, date(2026, 8, 5))
+
+    def test_non_owner_cannot_edit_dates(self):
+        from django.http import Http404
+        from django.test import RequestFactory
+        from . import views
+        request = RequestFactory().get(reverse('edit_task_dates', args=[self.task.pk]))
+        request.user = self.other_client
+        with self.assertRaises(Http404):
+            views.edit_task_dates(request, self.task.pk)
+
+    def test_dates_locked_once_task_is_completed(self):
+        from datetime import date
+        self.task.status = Task.STATUS_COMPLETED
+        self.task.save()
+        self.client.login(username=self.client_user.email, password='pass12345')
+        response = self.client.post(
+            reverse('edit_task_dates', args=[self.task.pk]),
+            {'date_type': 'single', 'preferred_date': '2026-09-01'},
+            secure=True,
+        )
+        self.assertRedirects(response, reverse('task_detail', args=[self.task.pk]), fetch_redirect_response=False)
+        self.task.refresh_from_db()
+        self.assertEqual(self.task.preferred_date, date(2026, 8, 1))
+
+
 class PlatformFeeCalculationTests(TestCase):
     """calculate_platform_fee(): quantization to cents + negative-value guard."""
 

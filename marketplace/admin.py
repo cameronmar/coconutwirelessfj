@@ -371,7 +371,7 @@ class TaskAdmin(admin.ModelAdmin):
     readonly_fields = ['created_at', 'completed_at']
     fieldsets = (
         ('Task Info', {'fields': ('title', 'category', 'categories', 'description')}),
-        ('Location & Schedule', {'fields': ('town', 'preferred_date', 'completed_at')}),
+        ('Location & Schedule', {'fields': ('town', 'preferred_date', 'preferred_date_end', 'completed_at')}),
         ('Budget & Value', {'fields': ('budget', 'final_job_value', 'budget_type')}),
         ('Materials & Inclusions', {'fields': ('materials_responsibility', 'meals_provided', 'parking_available_flag', 'site_access_available', 'tools_required', 'rubbish_removal_required', 'after_hours_required', 'on_site_inspection_required', 'delivery_required', 'clean_up_required', 'client_provide_photos', 'warranty_followup_requested', 'materials_notes', 'parking_notes', 'access_notes', 'special_instructions')}),
         ('Assignment & Status', {'fields': ('client', 'assigned_tradie', 'status')}),

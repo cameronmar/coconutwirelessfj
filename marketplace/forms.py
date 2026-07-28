@@ -279,6 +279,44 @@ class ChangePasswordForm(forms.Form):
 
 # ── Task form ─────────────────────────────────────────────────────────────────
 
+DATE_TYPE_CHOICES = [
+    ('flexible', "I'm flexible / no specific date"),
+    ('single',   'On a specific date'),
+    ('range',    'Within a date range'),
+]
+
+
+def _initial_date_type(task):
+    if task and task.pk and task.preferred_date_end:
+        return 'range'
+    if task and task.pk and task.preferred_date:
+        return 'single'
+    return 'flexible'
+
+
+def _clean_task_dates(cleaned_data):
+    """Reconciles the non-model date_type choice with preferred_date /
+    preferred_date_end, shared by TaskForm and TaskDateForm so single-date,
+    range, and flexible mean the same thing everywhere a job's schedule can
+    be set."""
+    date_type = cleaned_data.get('date_type') or 'flexible'
+    start = cleaned_data.get('preferred_date')
+    end = cleaned_data.get('preferred_date_end')
+    if date_type == 'range':
+        if not start or not end:
+            raise ValidationError('Please provide both a start and end date for the date range.')
+        if end < start:
+            raise ValidationError('The end date must be on or after the start date.')
+    elif date_type == 'single':
+        if not start:
+            raise ValidationError('Please choose a date.')
+        cleaned_data['preferred_date_end'] = None
+    else:
+        cleaned_data['preferred_date'] = None
+        cleaned_data['preferred_date_end'] = None
+    return cleaned_data
+
+
 class TaskForm(forms.ModelForm):
     category = forms.ChoiceField(
         choices=[], widget=forms.Select(attrs={'class': 'form-input'})
@@ -289,16 +327,25 @@ class TaskForm(forms.ModelForm):
         required=False,
         label='Additional categories (optional — for bigger jobs spanning multiple trades)',
     )
+    date_type = forms.ChoiceField(
+        choices=DATE_TYPE_CHOICES, required=False,
+        widget=forms.RadioSelect(attrs={'class': 'form-radio'}),
+    )
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields['category'].choices = TradeCategory.get_choices()
         self.fields['categories'].label_from_instance = lambda obj: f'{obj.icon} {obj.name}'.strip()
+        self.fields['date_type'].initial = _initial_date_type(self.instance)
+
+    def clean(self):
+        return _clean_task_dates(super().clean())
 
     class Meta:
         model  = Task
         fields = [
-            'title', 'category', 'categories', 'description', 'budget', 'town', 'preferred_date',
+            'title', 'category', 'categories', 'description', 'budget', 'town',
+            'date_type', 'preferred_date', 'preferred_date_end',
             'materials_responsibility', 'meals_provided', 'parking_available_flag', 'site_access_available',
             'tools_required', 'rubbish_removal_required', 'after_hours_required', 'on_site_inspection_required',
             'delivery_required', 'clean_up_required', 'client_provide_photos', 'warranty_followup_requested',
@@ -311,6 +358,7 @@ class TaskForm(forms.ModelForm):
             'budget':              forms.NumberInput(attrs={'class': 'form-input', 'placeholder': 'e.g. 150', 'min': '0', 'step': '0.01'}),
             'town':                forms.Select(attrs={'class': 'form-input'}),
             'preferred_date':      forms.DateInput(attrs={'class': 'form-input', 'type': 'date'}),
+            'preferred_date_end':  forms.DateInput(attrs={'class': 'form-input', 'type': 'date'}),
             'materials_responsibility': forms.Select(attrs={'class': 'form-input'}),
             'meals_provided':      forms.CheckboxInput(attrs={'class': 'form-checkbox'}),
             'parking_available_flag': forms.CheckboxInput(attrs={'class': 'form-checkbox'}),
@@ -329,6 +377,30 @@ class TaskForm(forms.ModelForm):
             'special_instructions': forms.Textarea(attrs={'class': 'form-input', 'rows': 3, 'placeholder': 'Any special instructions for local professionals…'}),
             'urgency':             forms.Select(attrs={'class': 'form-input'}),
             'budget_type':         forms.Select(attrs={'class': 'form-input'}),
+        }
+
+
+class TaskDateForm(forms.ModelForm):
+    """Lets a client change an already-posted task's schedule without
+    reopening the full post-task form."""
+    date_type = forms.ChoiceField(
+        choices=DATE_TYPE_CHOICES, required=False,
+        widget=forms.RadioSelect(attrs={'class': 'form-radio'}),
+    )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields['date_type'].initial = _initial_date_type(self.instance)
+
+    def clean(self):
+        return _clean_task_dates(super().clean())
+
+    class Meta:
+        model  = Task
+        fields = ['date_type', 'preferred_date', 'preferred_date_end']
+        widgets = {
+            'preferred_date':     forms.DateInput(attrs={'class': 'form-input', 'type': 'date'}),
+            'preferred_date_end': forms.DateInput(attrs={'class': 'form-input', 'type': 'date'}),
         }
 
 

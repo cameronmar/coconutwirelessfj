@@ -69,16 +69,30 @@
 
         <div class="form-card">
           <h2>Location &amp; timing</h2>
-          <div class="row2">
-            <div class="field">
-              <label>Town</label>
-              {{ form.town }}
-              {% for e in form.town.errors %}<div class="field-error">{{e}}</div>{% endfor %}
+          <div class="field">
+            <label>Town</label>
+            {{ form.town }}
+            {% for e in form.town.errors %}<div class="field-error">{{e}}</div>{% endfor %}
+          </div>
+          <div class="field">
+            <label>When do you need this done?</label>
+            <div id="dateTypeChoices" style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:10px;">
+              {% for radio in form.date_type %}
+                <label class="field-checkbox">{{ radio.tag }} {{ radio.choice_label }}</label>
+              {% endfor %}
             </div>
-            <div class="field">
-              <label>Preferred date <span style="color:var(--muted);font-weight:400">(optional)</span></label>
-              {{ form.preferred_date }}
+            <div class="row2" id="dateFieldsRow" style="display:none;">
+              <div class="field">
+                <label id="dateStartLabel">Date</label>
+                {{ form.preferred_date }}
+              </div>
+              <div class="field" id="dateEndField" style="display:none;">
+                <label>End date</label>
+                {{ form.preferred_date_end }}
+              </div>
             </div>
+            {% for e in form.preferred_date.errors %}<div class="field-error">{{e}}</div>{% endfor %}
+            {% for e in form.preferred_date_end.errors %}<div class="field-error">{{e}}</div>{% endfor %}
           </div>
         </div>
 
@@ -158,5 +172,29 @@ function pickCat(val, el){
   el.setAttribute('aria-checked', 'true');
   document.getElementById('catInput').value=val;
 }
+
+function updateDateFields(){
+  var checked = document.querySelector('input[name="date_type"]:checked');
+  var type = checked ? checked.value : 'flexible';
+  var fieldsRow = document.getElementById('dateFieldsRow');
+  var endField = document.getElementById('dateEndField');
+  var startLabel = document.getElementById('dateStartLabel');
+  if(type === 'flexible'){
+    fieldsRow.style.display = 'none';
+    return;
+  }
+  fieldsRow.style.display = '';
+  if(type === 'range'){
+    endField.style.display = '';
+    startLabel.textContent = 'Start date';
+  } else {
+    endField.style.display = 'none';
+    startLabel.textContent = 'Date';
+  }
+}
+document.querySelectorAll('input[name="date_type"]').forEach(function(r){
+  r.addEventListener('change', updateDateFields);
+});
+updateDateFields();
 </script>
 {% endblock %}

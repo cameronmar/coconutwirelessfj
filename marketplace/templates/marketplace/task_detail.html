@@ -61,7 +61,7 @@
           <span>{{ task.category_label }}</span>
           <span>📍 <strong>{{ task.town }}</strong></span>
           <span>💰 <strong>FJD ${{ task.budget }}</strong></span>
-          {% if task.preferred_date %}<span>📅 <strong>{{ task.preferred_date }}</strong></span>{% endif %}
+          {% if task.preferred_date %}<span>📅 <strong>{{ task.date_display }}</strong></span>{% endif %}
           <span>🕐 Posted {{ task.created_at|timesince }} ago</span>
         </div>
         {% if task.status == 'completed' %}
@@ -354,7 +354,10 @@
           </div>
         </div>
         {% endif %}
-        {% if task.preferred_date %}<div class="det-row"><span class="lbl">Preferred date</span><span>{{ task.preferred_date }}</span></div>{% endif %}
+        {% if task.preferred_date %}<div class="det-row"><span class="lbl">{% if task.is_date_range %}Preferred dates{% else %}Preferred date{% endif %}</span><span>{{ task.date_display }}</span></div>{% endif %}
+        {% if can_edit_dates %}
+          <a href="{% url 'edit_task_dates' task.pk %}" class="btn btn-outline-blue btn-sm" style="width:100%;text-align:center;margin-top:10px;">Edit dates</a>
+        {% endif %}
         {% if can_complete %}
           <form method="post" action="{% url 'complete_task' task.pk %}" style="margin-top:14px;">
             {% csrf_token %}

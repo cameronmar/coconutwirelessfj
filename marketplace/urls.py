@@ -26,6 +26,7 @@ urlpatterns = [
     path('tasks/',                 views.browse_tasks,  name='browse_tasks'),
     path('tasks/post/',            views.post_task,     name='post_task'),
     path('tasks/<int:pk>/',        views.task_detail,   name='task_detail'),
+    path('tasks/<int:pk>/edit-dates/', views.edit_task_dates, name='edit_task_dates'),
     path('tasks/<int:pk>/quote/',  views.submit_quote,  name='submit_quote'),
     path('tasks/<int:pk>/quote/check-promo/', views.check_promo_code, name='check_promo_code'),
     path('tasks/<int:pk>/quoting-appointment/', views.book_quoting_appointment, name='book_quoting_appointment'),

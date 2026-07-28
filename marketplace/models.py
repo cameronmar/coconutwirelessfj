@@ -330,6 +330,10 @@ class Task(models.Model):
     budget          = models.DecimalField(max_digits=10, decimal_places=2)
     town            = models.CharField(max_length=50, choices=TOWN_CHOICES, db_index=True)
     preferred_date  = models.DateField(null=True, blank=True)
+    preferred_date_end = models.DateField(
+        null=True, blank=True,
+        help_text='Set together with preferred_date to describe a date range instead of a single date.',
+    )
     status          = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_OPEN, db_index=True)
     assigned_tradie = models.ForeignKey(
         User, on_delete=models.SET_NULL, null=True, blank=True, related_name='assigned_tasks'
@@ -408,6 +412,17 @@ class Task(models.Model):
     @property
     def quote_count(self):
         return self.quotes.count()
+
+    @property
+    def is_date_range(self):
+        return bool(self.preferred_date and self.preferred_date_end and self.preferred_date_end != self.preferred_date)
+
+    @property
+    def date_display(self):
+        """Human-readable schedule: a range, a single date, or nothing set."""
+        if self.is_date_range:
+            return f'{self.preferred_date:%d %b %Y} – {self.preferred_date_end:%d %b %Y}'
+        return self.preferred_date
 
     def has_quoting_appointments(self):
         return self.quoting_appointments.exists()

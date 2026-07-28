@@ -103,7 +103,7 @@
             <div class="tc-desc">{{ task.description }}</div>
             <div class="tc-meta">
               <span>📍 {{ task.town }}</span>
-              {% if task.preferred_date %}<span>📅 {{ task.preferred_date }}</span>{% endif %}
+              {% if task.preferred_date %}<span>📅 {{ task.date_display }}</span>{% endif %}
               <span>💬 {{ task.quote_count_annotated }} quote{{ task.quote_count_annotated|pluralize }}</span>
               <span>🕐 {{ task.created_at|timesince }} ago</span>
             </div>
