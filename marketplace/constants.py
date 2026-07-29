@@ -33,6 +33,7 @@ TRADE_CHOICES = [
     ('whitegoods',  '🧊 Whitegoods'),
     ('small_appliance', '🔌 Small Appliance Repair'),
     ('laundry_tech', '🧺 Laundry Tech'),
+    ('massage',     '💆 Massage'),
 ]
 
 TOWN_CHOICES = [

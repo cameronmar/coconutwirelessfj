@@ -575,7 +575,7 @@ class TaskPhotoAdmin(admin.ModelAdmin):
 
 @admin.register(PlatformSettings)
 class PlatformSettingsAdmin(admin.ModelAdmin):
-    list_display = ['success_fee_rate', 'success_fee_cap', 'large_job_threshold', 'large_job_fee_rate', 'active', 'updated_at']
+    list_display = ['success_fee_rate', 'market_fee_rate', 'success_fee_cap', 'large_job_threshold', 'large_job_fee_rate', 'active', 'updated_at']
     list_filter = ['active', 'updated_at']
     readonly_fields = ['updated_at']
     fieldsets = (
@@ -583,6 +583,7 @@ class PlatformSettingsAdmin(admin.ModelAdmin):
             'fields': (
                 'success_fee_rate', 'success_fee_cap',
                 'large_job_threshold', 'large_job_fee_rate',
+                'market_fee_rate',
                 'active', 'updated_at'
             )
         }),

@@ -30,7 +30,13 @@ from .models import (
     TradieProfile,
     User,
 )
-from .utils import calculate_platform_fee, create_platform_fee_for_task, send_invoice_notifications
+from .utils import (
+    calculate_market_price_per_unit,
+    calculate_market_take_home,
+    calculate_platform_fee,
+    create_platform_fee_for_task,
+    send_invoice_notifications,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -1125,6 +1131,29 @@ class PlatformFeeCalculationTests(TestCase):
     def test_negative_job_value_never_produces_a_negative_fee(self):
         _, _, fee = calculate_platform_fee(Decimal('-500.00'), self.settings_obj)
         self.assertEqual(fee, Decimal('0.00'))
+
+
+class MarketFeeRateTests(TestCase):
+    """Market listing pricing uses its own market_fee_rate, independent of
+    the job/task success_fee_rate — the two can differ (e.g. 2% vs 7.5%)."""
+
+    def setUp(self):
+        self.settings_obj = PlatformSettings.objects.create(
+            success_fee_rate=Decimal('7.5'), success_fee_cap=Decimal('75.00'),
+            large_job_threshold=Decimal('5000.00'), large_job_fee_rate=Decimal('3.00'),
+            market_fee_rate=Decimal('2.0'), active=True,
+        )
+
+    def test_market_take_home_uses_market_rate_not_success_rate(self):
+        breakdown = calculate_market_take_home(Decimal('100.00'), 1, settings=self.settings_obj)
+        self.assertEqual(breakdown['fee_rate'], Decimal('2.0'))
+        self.assertEqual(breakdown['fee_amount'], Decimal('2.00'))
+        self.assertEqual(breakdown['take_home_total'], Decimal('98.00'))
+
+    def test_market_price_per_unit_uses_market_rate_not_success_rate(self):
+        breakdown = calculate_market_price_per_unit(Decimal('98.00'), 1, settings=self.settings_obj)
+        self.assertEqual(breakdown['fee_rate'], Decimal('2.0'))
+        self.assertEqual(breakdown['total_price'], Decimal('100.00'))
 
 
 class PlatformSettingsSingletonTests(TestCase):

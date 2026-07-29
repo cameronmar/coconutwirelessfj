@@ -754,6 +754,11 @@ class PlatformSettings(models.Model):
         default=7.5,
         help_text='Success fee percentage (e.g. 7.5 for 7.5%)'
     )
+    market_fee_rate = models.DecimalField(
+        max_digits=5, decimal_places=2,
+        default=2.0,
+        help_text='Platform fee percentage applied to Market listing sales (e.g. 2 for 2%) — separate from the job/task success fee rate.'
+    )
     success_fee_cap = models.DecimalField(
         max_digits=10, decimal_places=2,
         default=75.00,

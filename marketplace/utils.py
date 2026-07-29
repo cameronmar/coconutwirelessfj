@@ -206,11 +206,12 @@ def calculate_market_price_per_unit(total_take_home, units, vat_rate=None, setti
         3. + fee_amount   -> total_price        = subtotal_after_vat / (1 - fee_rate/100)
         4. ÷ units        -> price_per_unit     = total_price / units
 
-    Uses the flat success_fee_rate (not the large-job tiered rate) since
-    Market pricing doesn't have a natural "job value" to tier on. Dividing
-    by (1 - vat)(1 - fee) in two steps (rather than one combined multiplier)
-    is mathematically identical — division is associative — but lets the UI
-    show VAT and the platform fee as distinct line items.
+    Uses the flat market_fee_rate — a separate rate from the job/task
+    success_fee_rate — since Market pricing doesn't have a natural "job
+    value" to tier on. Dividing by (1 - vat)(1 - fee) in two steps (rather
+    than one combined multiplier) is mathematically identical — division is
+    associative — but lets the UI show VAT and the platform fee as distinct
+    line items.
 
     Returns a dict of Decimals (all money values quantized to cents), or
     None if the inputs/settings are invalid.
@@ -220,7 +221,7 @@ def calculate_market_price_per_unit(total_take_home, units, vat_rate=None, setti
     if not settings or total_take_home is None or total_take_home <= 0 or not units or units <= 0:
         return None
 
-    fee_rate = Decimal(str(settings.success_fee_rate))
+    fee_rate = Decimal(str(settings.market_fee_rate))
     vat_rate = Decimal(str(vat_rate)) if vat_rate else Decimal('0')
     vat_multiplier = Decimal('1') - (vat_rate / Decimal('100'))
     fee_multiplier = Decimal('1') - (fee_rate / Decimal('100'))
@@ -273,7 +274,7 @@ def calculate_market_take_home(price_per_unit, units, vat_rate=None, settings=No
     if not settings or price_per_unit is None or price_per_unit <= 0 or not units or units <= 0:
         return None
 
-    fee_rate = Decimal(str(settings.success_fee_rate))
+    fee_rate = Decimal(str(settings.market_fee_rate))
     vat_rate = Decimal(str(vat_rate)) if vat_rate else Decimal('0')
     vat_multiplier = Decimal('1') - (vat_rate / Decimal('100'))
 
