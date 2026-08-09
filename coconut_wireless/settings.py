@@ -62,6 +62,16 @@ BETA_GATE_TRADIE_SIGNUPS = _get_bool_env('BETA_GATE_TRADIE_SIGNUPS', CLOSED_BETA
 BETA_ALLOWED_EMAILS = {email.lower() for email in _get_list_env('BETA_ALLOWED_EMAILS', '')}
 BETA_ALLOWED_DOMAINS = {domain.lower().lstrip('@') for domain in _get_list_env('BETA_ALLOWED_DOMAINS', '')}
 
+# Facebook login / multi-workspace / Messenger — phased rollout flags. All off
+# by default; see docs/WORKSPACE_MIGRATION.md (once written) for what each
+# gates. Only MULTI_WORKSPACE_ENABLED has any effect yet — the rest are inert
+# until their respective integrations land.
+FACEBOOK_LOGIN_ENABLED = _get_bool_env('FACEBOOK_LOGIN_ENABLED', False)
+FACEBOOK_PAGE_LINKING_ENABLED = _get_bool_env('FACEBOOK_PAGE_LINKING_ENABLED', False)
+MESSENGER_CONNECTION_ENABLED = _get_bool_env('MESSENGER_CONNECTION_ENABLED', False)
+MESSENGER_NOTIFICATIONS_ENABLED = _get_bool_env('MESSENGER_NOTIFICATIONS_ENABLED', False)
+MULTI_WORKSPACE_ENABLED = _get_bool_env('MULTI_WORKSPACE_ENABLED', False)
+
 # ── Application definition ─────────────────────────────────────────────────────
 INSTALLED_APPS = [
     'django.contrib.admin',

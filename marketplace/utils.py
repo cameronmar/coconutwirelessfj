@@ -11,6 +11,7 @@ from .models import (
     PlatformSettings, PlatformFee, Invoice, InvoiceLine, InvoiceNotification, Quote, Task,
     PlatformNotice, TradieProfile, User,
 )
+from . import workspaces
 
 
 def get_active_platform_settings():
@@ -352,6 +353,7 @@ def create_platform_fee_for_task(task, final_job_value):
         platform_fee = PlatformFee.objects.create(
             task=task,
             tradie=task.assigned_tradie,
+            provider_workspace=workspaces.resolve_individual_provider_workspace_for_write(task.assigned_tradie, 'create_platform_fee_for_task'),
             final_job_value=final_job_value,
             fee_rate=fee_rate,
             fee_cap=fee_cap,
@@ -458,6 +460,7 @@ def create_invoice_with_lines(tradie, period_start, period_end, fee_ids, manual_
 
         invoice = Invoice.objects.create(
             tradie=tradie,
+            provider_workspace=workspaces.resolve_individual_provider_workspace_for_write(tradie, 'create_invoice_with_lines'),
             invoice_number=generate_invoice_number(tradie),
             period_start=period_start,
             period_end=period_end,
