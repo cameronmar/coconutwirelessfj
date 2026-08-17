@@ -32,6 +32,11 @@ from .models import (
     QuotingAppointment,
     QuotingAppointmentSlot,
     Sponsor,
+    SupplyCategory,
+    SupplierProfile,
+    SupplierEnquiry,
+    SupplierQuote,
+    SupplierMessage,
     Task,
     TaskPhoto,
     TermsAcceptance,
@@ -1191,3 +1196,52 @@ class MarketOrderAdmin(admin.ModelAdmin):
                 MarketListing.objects.filter(pk=obj.listing_id).update(
                     units_sold=F('units_sold') + obj.quantity
                 )
+
+
+# ── Suppliers ─────────────────────────────────────────────────────────────────
+
+@admin.register(SupplyCategory)
+class SupplyCategoryAdmin(admin.ModelAdmin):
+    list_display = ('name', 'slug', 'icon', 'active', 'sort_order')
+    prepopulated_fields = {'slug': ('name',)}
+    list_editable = ('active', 'sort_order')
+
+
+@admin.register(SupplierProfile)
+class SupplierProfileAdmin(admin.ModelAdmin):
+    list_display = ('user', 'business_name', 'verification_status', 'documents_verified')
+    list_filter = ('verification_status',)
+    actions = ['approve_suppliers', 'reject_suppliers', 'suspend_suppliers']
+    readonly_fields = ('documents_verified',)
+
+    @admin.action(description='Approve selected suppliers')
+    def approve_suppliers(self, request, queryset):
+        queryset.update(verification_status='approved', documents_verified=True)
+
+    @admin.action(description='Reject selected suppliers')
+    def reject_suppliers(self, request, queryset):
+        queryset.update(verification_status='rejected', documents_verified=False)
+
+    @admin.action(description='Suspend selected suppliers')
+    def suspend_suppliers(self, request, queryset):
+        queryset.update(verification_status='suspended', documents_verified=False)
+
+
+@admin.register(SupplierEnquiry)
+class SupplierEnquiryAdmin(admin.ModelAdmin):
+    list_display = ('title', 'client', 'supplier', 'status', 'created_at')
+    list_filter = ('status',)
+    raw_id_fields = ('client', 'supplier')
+
+
+@admin.register(SupplierQuote)
+class SupplierQuoteAdmin(admin.ModelAdmin):
+    list_display = ('enquiry', 'supplier', 'total', 'status', 'created_at')
+    list_filter = ('status',)
+
+
+@admin.register(SupplierMessage)
+class SupplierMessageAdmin(admin.ModelAdmin):
+    list_display = ('enquiry', 'sender', 'recipient', 'created_at')
+    raw_id_fields = ('sender', 'recipient', 'enquiry')
+

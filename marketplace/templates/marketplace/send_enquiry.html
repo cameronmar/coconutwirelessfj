@@ -1,0 +1,55 @@
+{% extends "marketplace/base.html" %}
+{% block title %}Send Enquiry – The Coconut Wireless Network{% endblock %}
+
+{% block extra_css %}
+<style>
+.enq-page{padding:32px 0 50px;}
+.enq-wrap{max-width:560px;margin:0 auto;}
+.enq-wrap h1{font-size:1.5rem;margin:0 0 4px;}
+.enq-wrap .sub{color:var(--muted);font-size:.9rem;margin:0 0 22px;}
+.form-card{background:var(--white);border-radius:18px;box-shadow:0 4px 18px rgba(0,80,120,.08);padding:24px;margin-bottom:18px;}
+.form-card h2{font-size:1rem;color:var(--blue);margin:0 0 16px;padding-bottom:9px;border-bottom:1px solid var(--blue-light);}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container enq-page">
+  <div class="enq-wrap">
+    <div class="breadcrumb">
+      <a href="{% url 'browse_suppliers' %}">Suppliers</a> ›
+      <a href="{% url 'supplier_profile' pk=supplier.pk %}">{{ profile.business_name|default:supplier.full_name }}</a> ›
+      Send Enquiry
+    </div>
+
+    <h1>Send Enquiry to {{ profile.business_name|default:supplier.full_name }}</h1>
+    <p class="sub">Describe what you need and the supplier will respond with a detailed quote.</p>
+
+    <form method="post">
+      {% csrf_token %}
+      <div class="form-card">
+        <h2>Enquiry details</h2>
+        <div class="field">
+          <label for="id_title">Enquiry title</label>
+          {{ form.title }}
+          {% for e in form.title.errors %}<div class="field-error">{{ e }}</div>{% endfor %}
+        </div>
+        <div class="field">
+          <label for="id_description">Description</label>
+          {{ form.description }}
+          <div class="hint">Include quantities, specifications, delivery requirements, and any other details.</div>
+          {% for e in form.description.errors %}<div class="field-error">{{ e }}</div>{% endfor %}
+        </div>
+        <div class="field">
+          <label for="id_town">Delivery / pickup town</label>
+          {{ form.town }}
+          {% for e in form.town.errors %}<div class="field-error">{{ e }}</div>{% endfor %}
+        </div>
+      </div>
+
+      {% if form.non_field_errors %}<div class="field-error" style="margin-bottom:12px;">{{ form.non_field_errors }}</div>{% endif %}
+
+      <button type="submit" class="btn btn-primary" style="width:100%;padding:14px;font-size:1rem;">Send Enquiry →</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

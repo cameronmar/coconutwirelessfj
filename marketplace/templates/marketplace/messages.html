@@ -38,6 +38,8 @@ body,html{height:100%;}
 .msg.out .bubble{background:var(--blue);color:var(--white);border-bottom-right-radius:4px;}
 .msg-time{font-size:.7rem;color:var(--muted);margin-top:2px;}
 .msg.out .msg-time{text-align:right;}
+.msg-status{font-size:.68rem;color:var(--muted);margin-top:1px;text-align:right;}
+.msg-status.read{color:var(--blue);font-weight:600;}
 .date-div{text-align:center;font-size:.73rem;color:var(--muted);margin:5px 0;}
 /* Input */
 .chat-input{padding:12px 14px;background:var(--white);border-top:1px solid #dde8ef;display:flex;gap:9px;align-items:flex-end;flex-shrink:0;}
@@ -100,6 +102,15 @@ footer{display:none;}
             <div>
               <div class="bubble">{{ msg.body }}</div>
               <div class="msg-time">{{ msg.created_at|time:"H:i" }}</div>
+              {% if msg.sender == user %}
+                {% if msg.read_at %}
+                  <div class="msg-status read">Read {{ msg.read_at|time:"H:i" }}</div>
+                {% elif msg.delivered_at %}
+                  <div class="msg-status">Delivered {{ msg.delivered_at|time:"H:i" }}</div>
+                {% else %}
+                  <div class="msg-status">Sent</div>
+                {% endif %}
+              {% endif %}
             </div>
           </div>
         {% empty %}

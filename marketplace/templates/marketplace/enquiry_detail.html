@@ -1,0 +1,313 @@
+{% extends "marketplace/base.html" %}
+{% block title %}{{ enquiry.title }} – Enquiry – The Coconut Wireless Network{% endblock %}
+
+{% block extra_css %}
+<style>
+.td-page{padding:0 0 50px;}
+.td-grid{display:grid;grid-template-columns:1fr 320px;gap:22px;padding-top:18px;}
+.task-hdr{background:var(--white);border-radius:16px;box-shadow:0 4px 18px rgba(0,80,120,.08);padding:24px;margin-bottom:16px;}
+.task-hdr h1{font-size:1.5rem;margin:0 0 12px;}
+.meta-row{display:flex;gap:16px;flex-wrap:wrap;margin-bottom:14px;font-size:.87rem;color:var(--muted);}
+.meta-row strong{color:var(--text);}
+.sect-card{background:var(--white);border-radius:16px;box-shadow:0 4px 18px rgba(0,80,120,.08);padding:22px;margin-bottom:14px;}
+.sect-card h2{font-size:1rem;color:var(--blue);margin:0 0 14px;padding-bottom:9px;border-bottom:1px solid var(--blue-light);}
+.desc-text{color:var(--muted);font-size:.9rem;line-height:1.7;}
+/* Quote table */
+.quote-table{width:100%;border-collapse:collapse;font-size:.87rem;margin-bottom:12px;}
+.quote-table th{text-align:left;padding:8px 10px;background:#f4f8fa;border-bottom:1px solid #dde8ef;color:var(--muted);font-size:.78rem;}
+.quote-table td{padding:8px 10px;border-bottom:1px solid #f4f8fa;}
+.quote-table .num{text-align:right;}
+.summary-row{display:flex;justify-content:space-between;padding:7px 10px;font-size:.88rem;}
+.summary-row.total{font-weight:800;font-size:1rem;color:var(--blue);border-top:2px solid var(--blue-light);}
+.summary-row .lbl{color:var(--muted);}
+/* Quote form */
+.qf-grid{display:grid;grid-template-columns:1fr 100px 110px 110px 36px;gap:8px;align-items:center;margin-bottom:6px;font-size:.85rem;}
+.qf-grid input{padding:7px 10px;border:1.5px solid #cce4ef;border-radius:8px;font-size:.85rem;width:100%;}
+.qf-grid input:focus{outline:none;border-color:var(--blue);}
+.qf-total{font-weight:700;color:var(--blue);}
+.qf-footer{background:#f4f8fa;border-radius:10px;padding:14px;margin-bottom:12px;}
+.qf-footer-row{display:flex;justify-content:space-between;align-items:center;padding:5px 0;font-size:.87rem;}
+.qf-footer-row input{width:70px;padding:5px 8px;border:1.5px solid #cce4ef;border-radius:7px;font-size:.85rem;text-align:right;}
+.qf-footer-row .total-val{font-size:1.05rem;font-weight:800;color:var(--blue);}
+/* Response form */
+.resp-card{background:#f4f8fa;border-radius:12px;padding:16px;margin-top:14px;}
+.resp-card h3{font-size:.94rem;color:var(--blue);margin:0 0 10px;}
+/* Sidebar */
+.side-card{background:var(--white);border-radius:16px;box-shadow:0 4px 18px rgba(0,80,120,.08);padding:20px;margin-bottom:14px;position:sticky;top:16px;}
+.side-card h3{font-size:.94rem;color:var(--blue);margin:0 0 12px;}
+.det-row{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #f0f5f8;font-size:.88rem;}
+.det-row:last-of-type{border:none;}
+.det-row .lbl{color:var(--muted);}
+.add-row-btn{background:#f0f5f8;color:var(--blue);border:none;border-radius:8px;padding:7px 14px;font-size:.83rem;cursor:pointer;font-weight:600;}
+@media(max-width:800px){.td-grid{grid-template-columns:1fr;}.side-card{position:static;}}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container td-page">
+  <div class="breadcrumb">
+    <a href="{% url 'home' %}">Home</a> ›
+    {% if is_supplier %}
+      <a href="{% url 'supplier_dashboard' %}">Supplier Dashboard</a>
+    {% else %}
+      <a href="{% url 'client_dashboard' %}">Dashboard</a>
+    {% endif %}
+    › {{ enquiry.title|truncatechars:40 }}
+  </div>
+
+  <div class="td-grid">
+    <div>
+      <!-- Enquiry header -->
+      <div class="task-hdr">
+        <span class="chip chip-{{ enquiry.status }}">{{ enquiry.get_status_display }}</span>
+        <h1 style="margin-top:10px;">{{ enquiry.title }}</h1>
+        <div class="meta-row">
+          <span>📍 <strong>{{ enquiry.get_town_display }}</strong></span>
+          <span>🕐 Sent {{ enquiry.created_at|timesince }} ago</span>
+          {% if is_supplier %}
+            <span>From: <strong>{{ enquiry.client.full_name }}</strong></span>
+          {% else %}
+            <span>To: <strong>{{ enquiry.supplier.full_name }}</strong></span>
+          {% endif %}
+        </div>
+        <p class="desc-text">{{ enquiry.description }}</p>
+      </div>
+
+      <!-- Quote history -->
+      {% if quotes %}
+      <div class="sect-card">
+        <h2>Quotes ({{ quotes|length }})</h2>
+        {% for quote in quotes %}
+        <div style="border:1.5px solid #dde8ef;border-radius:12px;padding:16px;margin-bottom:14px;">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px;">
+            <div>
+              <div style="font-weight:700;font-size:.92rem;">Quote from {{ quote.supplier.full_name }}</div>
+              <div style="font-size:.78rem;color:var(--muted);">{{ quote.created_at|date:"N j, Y" }}
+                {% if quote.lead_time %} · Lead time: {{ quote.lead_time }}{% endif %}
+                {% if quote.valid_until %} · Valid until: {{ quote.valid_until|date:"N j, Y" }}{% endif %}
+              </div>
+            </div>
+            <span class="chip chip-{{ quote.status }}">{{ quote.get_status_display }}</span>
+          </div>
+
+          <table class="quote-table">
+            <thead>
+              <tr>
+                <th>Description</th>
+                <th class="num">Qty</th>
+                <th class="num">Unit Price (VEP)</th>
+                <th class="num">Line Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for item in quote.items %}
+              <tr>
+                <td>{{ item.description }}</td>
+                <td class="num">{{ item.qty }}</td>
+                <td class="num">FJD ${{ item.unit_price_vep }}</td>
+                <td class="num">FJD ${{ item.line_total_vep }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+
+          <div style="max-width:320px;margin-left:auto;">
+            <div class="summary-row"><span class="lbl">Subtotal (VEP excl.)</span><span>FJD ${{ quote.vep_subtotal }}</span></div>
+            <div class="summary-row"><span class="lbl">VAT ({{ quote.vat_rate }}%)</span><span>FJD ${{ quote.vat_amount }}</span></div>
+            <div class="summary-row"><span class="lbl">Platform fee ({{ quote.platform_fee_rate }}%)</span><span>FJD ${{ quote.platform_fee_amount }}</span></div>
+            <div class="summary-row total"><span>Total</span><span>FJD ${{ quote.total }}</span></div>
+          </div>
+
+          {% if quote.message %}
+          <p style="margin-top:12px;font-size:.87rem;color:var(--muted);line-height:1.6;">{{ quote.message }}</p>
+          {% endif %}
+
+          {% if quote.modification_note %}
+          <div style="margin-top:10px;background:#fff3e0;border-radius:8px;padding:10px 14px;font-size:.85rem;color:#7a4f00;">
+            <strong>Modification requested:</strong> {{ quote.modification_note }}
+          </div>
+          {% endif %}
+
+          <!-- Client response form for pending quotes -->
+          {% if not is_supplier and quote.status == 'pending' and response_form %}
+          <div class="resp-card">
+            <h3>Respond to this quote</h3>
+            <form method="post" action="{% url 'respond_to_quote' enquiry_pk=enquiry.pk quote_pk=quote.pk %}">
+              {% csrf_token %}
+              <div class="field" style="margin-bottom:10px;">
+                <label>Response</label>
+                {{ response_form.status }}
+                {% for e in response_form.status.errors %}<div class="field-error">{{ e }}</div>{% endfor %}
+              </div>
+              <div class="field" id="mod-note-field" style="margin-bottom:10px;">
+                <label>Modification notes</label>
+                {{ response_form.modification_note }}
+                {% for e in response_form.modification_note.errors %}<div class="field-error">{{ e }}</div>{% endfor %}
+              </div>
+              {% if response_form.non_field_errors %}<div class="field-error" style="margin-bottom:8px;">{{ response_form.non_field_errors }}</div>{% endif %}
+              <button type="submit" class="btn btn-primary btn-sm">Submit Response</button>
+            </form>
+          </div>
+          <script>
+          (function(){
+            var sel = document.querySelector('[name=status]');
+            var noteField = document.getElementById('mod-note-field');
+            if (!sel || !noteField) return;
+            function toggle(){ noteField.style.display = sel.value === 'modification_requested' ? 'block' : 'none'; }
+            sel.addEventListener('change', toggle);
+            toggle();
+          })();
+          </script>
+          {% endif %}
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+
+      <!-- New quote form for supplier -->
+      {% if is_supplier %}{% if enquiry.status == 'open' %}
+      <div class="sect-card">
+        <h2>Send a Quote</h2>
+        <form method="post" action="{% url 'submit_supplier_quote' pk=enquiry.pk %}" id="quoteForm">
+          {% csrf_token %}
+          <input type="hidden" name="items_json" id="items_json" value="[]">
+          <input type="hidden" name="vat_rate" id="vat_rate_hidden" value="9">
+
+          <!-- Line items table -->
+          <div style="overflow-x:auto;">
+            <div class="qf-grid" style="font-weight:700;font-size:.78rem;color:var(--muted);text-transform:uppercase;letter-spacing:.3px;margin-bottom:0;">
+              <span>Description</span><span style="text-align:right;">Qty</span><span style="text-align:right;">Unit Price (VEP)</span><span style="text-align:right;">Line Total</span><span></span>
+            </div>
+            <div id="lineItems"></div>
+          </div>
+          <button type="button" class="add-row-btn" id="addRow" style="margin-bottom:16px;">+ Add row</button>
+
+          <!-- Summary footer -->
+          <div class="qf-footer">
+            <div class="qf-footer-row"><span style="color:var(--muted);">Subtotal (VEP excl.)</span><span id="subtotal_display">FJD $0.00</span></div>
+            <div class="qf-footer-row">
+              <span style="color:var(--muted);">VAT rate (%)</span>
+              <input type="number" id="vat_rate_input" value="9" min="0" max="100" step="0.01" style="width:70px;" oninput="recalc()">
+            </div>
+            <div class="qf-footer-row"><span style="color:var(--muted);">VAT amount</span><span id="vat_display">FJD $0.00</span></div>
+            <div class="qf-footer-row"><span style="color:var(--muted);">Platform fee (3%)</span><span id="fee_display">FJD $0.00</span></div>
+            <div class="qf-footer-row"><span style="font-weight:700;">Total</span><span class="total-val" id="total_display">FJD $0.00</span></div>
+          </div>
+
+          <div class="field" style="margin-bottom:12px;">
+            <label>Message (optional)</label>
+            <textarea name="message" class="form-input" rows="3" placeholder="Add a note about the quote, availability, etc."></textarea>
+          </div>
+          <div class="row2" style="margin-bottom:12px;">
+            <div class="field">
+              <label>Lead time (optional)</label>
+              <input type="text" name="lead_time" class="form-input" placeholder="e.g. 3–5 business days">
+            </div>
+            <div class="field">
+              <label>Valid until (optional)</label>
+              <input type="date" name="valid_until" class="form-input">
+            </div>
+          </div>
+
+          <button type="submit" class="btn btn-primary">Send Quote →</button>
+        </form>
+      </div>
+      {% endif %}{% endif %}
+    </div>
+
+    <!-- Sidebar -->
+    <div>
+      <div class="side-card">
+        <h3>Enquiry summary</h3>
+        <div class="det-row"><span class="lbl">Status</span><span class="chip chip-{{ enquiry.status }}">{{ enquiry.get_status_display }}</span></div>
+        {% if is_supplier %}
+          <div class="det-row"><span class="lbl">From</span><span>{{ enquiry.client.full_name }}</span></div>
+        {% else %}
+          <div class="det-row"><span class="lbl">To</span><span>{{ enquiry.supplier.full_name }}</span></div>
+        {% endif %}
+        <div class="det-row"><span class="lbl">Town</span><span>{{ enquiry.get_town_display }}</span></div>
+        <div class="det-row"><span class="lbl">Sent</span><span>{{ enquiry.created_at|date:"N j, Y" }}</span></div>
+      </div>
+
+      <div class="side-card">
+        <a href="{% url 'supplier_enquiry_messages' pk=enquiry.pk %}" class="btn btn-outline-blue" style="width:100%;display:block;text-align:center;">💬 Messages</a>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+var rows = [];
+
+function fmt(v){ return 'FJD $' + parseFloat(v).toFixed(2); }
+
+function recalc(){
+  var sub = rows.reduce(function(s,r){ return s + (parseFloat(r.qty)||0)*(parseFloat(r.unit_price_vep)||0); }, 0);
+  var vatRate = parseFloat(document.getElementById('vat_rate_input').value)||0;
+  var vat = sub * vatRate / 100;
+  var fee = sub * 3 / 100;
+  var total = sub + vat + fee;
+  document.getElementById('subtotal_display').textContent = fmt(sub);
+  document.getElementById('vat_display').textContent = fmt(vat);
+  document.getElementById('fee_display').textContent = fmt(fee);
+  document.getElementById('total_display').textContent = fmt(total);
+  document.getElementById('vat_rate_hidden').value = vatRate.toFixed(2);
+  // Update line totals
+  rows.forEach(function(r,i){
+    var lt = (parseFloat(r.qty)||0)*(parseFloat(r.unit_price_vep)||0);
+    var el = document.getElementById('lt_' + i);
+    if(el) el.textContent = fmt(lt);
+    r.line_total_vep = lt.toFixed(2);
+  });
+  document.getElementById('items_json').value = JSON.stringify(rows);
+}
+
+function renderRows(){
+  var container = document.getElementById('lineItems');
+  container.innerHTML = '';
+  rows.forEach(function(r,i){
+    var div = document.createElement('div');
+    div.className = 'qf-grid';
+    div.innerHTML = [
+      '<input type="text" placeholder="Description" value="'+escHtml(r.description||'')+'" oninput="rows['+i+'].description=this.value;recalc()">',
+      '<input type="number" placeholder="Qty" min="0" step="any" value="'+(r.qty||'')+'" style="text-align:right" oninput="rows['+i+'].qty=this.value;recalc()">',
+      '<input type="number" placeholder="0.00" min="0" step="0.01" value="'+(r.unit_price_vep||'')+'" style="text-align:right" oninput="rows['+i+'].unit_price_vep=this.value;recalc()">',
+      '<span class="qf-total" id="lt_'+i+'">'+fmt((parseFloat(r.qty)||0)*(parseFloat(r.unit_price_vep)||0))+'</span>',
+      '<button type="button" onclick="removeRow('+i+')" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:1.1rem;padding:0;">✕</button>',
+    ].join('');
+    container.appendChild(div);
+  });
+  recalc();
+}
+
+function escHtml(s){ var d=document.createElement('div');d.appendChild(document.createTextNode(s));return d.innerHTML; }
+
+function removeRow(i){ rows.splice(i,1); renderRows(); }
+
+// All of the above only matters when the quote-builder form is actually
+// rendered (supplier view, enquiry open for quoting) — #quoteForm and its
+// line-item elements don't exist on the client's view or once the enquiry
+// has moved on, so guard the whole thing rather than letting an unguarded
+// getElementById('addRow') throw on every other enquiry_detail page load.
+if (document.getElementById('quoteForm')) {
+  document.getElementById('addRow').addEventListener('click', function(){
+    rows.push({description:'',qty:'',unit_price_vep:'',line_total_vep:'0.00'});
+    renderRows();
+  });
+
+  document.getElementById('vat_rate_input').addEventListener('input', recalc);
+
+  document.getElementById('quoteForm').addEventListener('submit', function(){
+    document.getElementById('items_json').value = JSON.stringify(rows);
+    var vr = parseFloat(document.getElementById('vat_rate_input').value)||0;
+    document.getElementById('vat_rate_hidden').value = vr.toFixed(2);
+  });
+
+  // Start with one empty row
+  rows.push({description:'',qty:'',unit_price_vep:'',line_total_vep:'0.00'});
+  renderRows();
+}
+</script>
+{% endblock %}

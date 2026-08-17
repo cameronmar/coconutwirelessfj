@@ -1,0 +1,175 @@
+{% extends "marketplace/base.html" %}
+{% block title %}Register as a Supplier – The Coconut Wireless Network{% endblock %}
+
+{% block extra_css %}
+<style>
+.reg-page{padding:32px 0 50px;}
+.reg-wrap{max-width:580px;margin:0 auto;}
+.reg-wrap h1{font-size:1.7rem;margin:0 0 4px;}
+.reg-wrap .sub{color:var(--muted);margin:0 0 18px;font-size:.9rem;}
+.reg-wrap .sub a{color:var(--blue);text-decoration:none;font-weight:600;}
+.info-band{background:var(--blue-light);border-radius:12px;padding:13px 16px;font-size:.87rem;color:var(--blue-dark);margin-bottom:18px;}
+.form-card{background:var(--white);border-radius:18px;box-shadow:0 4px 18px rgba(0,80,120,.08);padding:24px;margin-bottom:18px;}
+.form-card h2{font-size:1rem;color:var(--blue);margin:0 0 16px;padding-bottom:9px;border-bottom:1px solid var(--blue-light);}
+.trades-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(138px,1fr));gap:8px;}
+.trade-chip{display:flex;align-items:center;gap:8px;padding:9px 12px;border:1.5px solid #cce4ef;border-radius:10px;font-size:.85rem;cursor:pointer;}
+.trade-chip input{accent-color:var(--blue);}
+.trade-chip:has(input:checked){border-color:var(--blue);background:var(--blue-light);color:var(--blue);font-weight:600;}
+.town-chips{display:flex;gap:8px;flex-wrap:wrap;}
+.town-chip{display:flex;align-items:center;gap:6px;padding:8px 14px;border:1.5px solid #cce4ef;border-radius:20px;font-size:.85rem;cursor:pointer;}
+.town-chip input{accent-color:var(--blue);}
+.town-chip:has(input:checked){border-color:var(--blue);background:var(--blue-light);color:var(--blue);font-weight:600;}
+.check-row{display:flex;align-items:flex-start;gap:10px;margin-bottom:18px;font-size:.87rem;color:var(--muted);line-height:1.5;}
+.check-row input{margin-top:2px;accent-color:var(--blue);}
+.check-row a{color:var(--blue);text-decoration:none;}
+.upload-field{border:1.5px dashed #9cc7db;border-radius:10px;padding:12px 14px;background:#f7fcff;}
+.upload-field input[type=file]{width:100%;}
+.upload-field .hint{margin-top:4px;font-size:.78rem;color:var(--muted);}
+.required-badge{font-size:.75rem;background:#e8f7ff;color:var(--blue);border-radius:6px;padding:2px 7px;margin-left:6px;font-weight:600;}
+.pw-wrap{position:relative;}
+.pw-wrap input{padding-right:38px;}
+.pw-toggle{position:absolute;right:8px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;font-size:1rem;color:var(--muted);padding:4px;line-height:1;}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container reg-page">
+  <div class="reg-wrap">
+    <h1>Register as a Supplier</h1>
+    <p class="sub">Already have an account? <a href="{% url 'login' %}">Log in</a> &nbsp;|&nbsp; Looking to hire? <a href="{% url 'register_client' %}">Client sign up</a></p>
+    <div class="info-band">Supply goods and services to clients across Fiji · Receive enquiries and send itemised quotes</div>
+
+    <form method="post" enctype="multipart/form-data">
+      {% csrf_token %}
+
+      <div class="form-card">
+        <h2>Personal details</h2>
+        <div class="row2">
+          <div class="field"><label for="id_first_name">First name</label>{{ form.first_name }}{% for e in form.first_name.errors %}<div class="field-error">{{e}}</div>{% endfor %}</div>
+          <div class="field"><label for="id_last_name">Last name</label>{{ form.last_name }}{% for e in form.last_name.errors %}<div class="field-error">{{e}}</div>{% endfor %}</div>
+        </div>
+        <div class="field"><label for="id_email">Email address</label>{{ form.email }}{% for e in form.email.errors %}<div class="field-error">{{e}}</div>{% endfor %}</div>
+        <div class="row2">
+          <div class="field"><label for="id_mobile">Mobile</label>{{ form.mobile }}{% for e in form.mobile.errors %}<div class="field-error">{{e}}</div>{% endfor %}</div>
+          <div class="field"><label for="id_town">Town / Base</label>{{ form.town }}{% for e in form.town.errors %}<div class="field-error">{{e}}</div>{% endfor %}</div>
+        </div>
+        <div class="row2">
+          <div class="field">
+            <label for="id_password">Password</label>
+            <div class="pw-wrap">
+              {{ form.password }}
+              <button type="button" class="pw-toggle" data-target="id_password" aria-label="Show password">👁</button>
+            </div>
+            {% for e in form.password.errors %}<div class="field-error">{{e}}</div>{% endfor %}
+          </div>
+          <div class="field">
+            <label for="id_password_confirm">Confirm password</label>
+            <div class="pw-wrap">
+              {{ form.password_confirm }}
+              <button type="button" class="pw-toggle" data-target="id_password_confirm" aria-label="Show password">👁</button>
+            </div>
+            {% for e in form.password_confirm.errors %}<div class="field-error">{{e}}</div>{% endfor %}
+          </div>
+        </div>
+      </div>
+
+      <div class="form-card">
+        <h2>Business details</h2>
+        <div class="row2">
+          <div class="field">
+            <label>Business Name <span style="color:var(--muted);font-weight:400">(optional)</span></label>
+            {{ form.business_name }}
+            {% for e in form.business_name.errors %}<div class="field-error">{{e}}</div>{% endfor %}
+          </div>
+          <div class="field">
+            <label>TIN Number <span style="color:var(--muted);font-weight:400">(optional)</span></label>
+            {{ form.tin }}
+          </div>
+        </div>
+        <div class="field">
+          <label>Supply Categories <span class="required-badge">Required</span></label>
+          <div class="trades-grid">
+            {% for slug, label in supply_choices %}
+            <label class="trade-chip">
+              <input type="checkbox" name="supply_categories" value="{{ slug }}"
+                {% if slug in form.supply_categories.value %}checked{% endif %}>
+              {{ label }}
+            </label>
+            {% endfor %}
+          </div>
+          {% for e in form.supply_categories.errors %}<div class="field-error">{{e}}</div>{% endfor %}
+        </div>
+        <div class="field">
+          <label>Towns you service <span class="required-badge">Required</span></label>
+          <div class="town-chips">
+            {% for value, label in town_choices %}
+            <label class="town-chip">
+              <input type="checkbox" name="service_towns" value="{{ value }}"
+                {% if value in form.service_towns.value %}checked{% endif %}>
+              {{ label }}
+            </label>
+            {% endfor %}
+          </div>
+          {% for e in form.service_towns.errors %}<div class="field-error">{{e}}</div>{% endfor %}
+        </div>
+        <div class="field">
+          <label>Bio <span style="color:var(--muted);font-weight:400">(optional)</span></label>
+          {{ form.bio }}
+        </div>
+      </div>
+
+      <div class="form-card">
+        <h2>Verification documents</h2>
+        <p style="font-size:.85rem;color:var(--muted);margin:0 0 16px;">Documents are reviewed by our team before your profile is approved. PDF or image files accepted (max 10MB each).</p>
+
+        <div class="field">
+          <label>TIN Letter <span class="required-badge">Required</span></label>
+          <div class="upload-field">
+            {{ form.tin_letter }}
+            <div class="hint">Upload your FRCA Tax Identification Number letter (PDF, JPG, or PNG).</div>
+          </div>
+          {% for e in form.tin_letter.errors %}<div class="field-error">{{e}}</div>{% endfor %}
+        </div>
+
+        <div class="field">
+          <label>Business Registration <span style="color:var(--muted);font-weight:400">(optional)</span></label>
+          <div class="upload-field">
+            {{ form.business_registration }}
+          </div>
+          {% for e in form.business_registration.errors %}<div class="field-error">{{e}}</div>{% endfor %}
+        </div>
+
+        <div class="field">
+          <label>Import/Export Licence <span style="color:var(--muted);font-weight:400">(optional)</span></label>
+          <div class="upload-field">
+            {{ form.import_export_licence }}
+          </div>
+          {% for e in form.import_export_licence.errors %}<div class="field-error">{{e}}</div>{% endfor %}
+        </div>
+      </div>
+
+      {% if form.non_field_errors %}<div class="field-error" style="margin-bottom:12px;">{{ form.non_field_errors }}</div>{% endif %}
+
+      <div class="check-row">
+        {{ form.accepted_terms }}
+        <span>I agree to the <a href="{% url 'terms' %}" target="_blank">Terms &amp; Conditions, Privacy Policy and Platform Rules</a></span>
+      </div>
+      {% for e in form.accepted_terms.errors %}<div class="field-error" style="margin-bottom:8px;">{{ e }}</div>{% endfor %}
+
+      <button type="submit" class="btn btn-primary" style="width:100%;padding:14px;font-size:1rem;">Create supplier account →</button>
+    </form>
+  </div>
+</div>
+
+<script>
+document.querySelectorAll('.pw-toggle').forEach(function (btn) {
+  btn.addEventListener('click', function () {
+    var input = document.getElementById(btn.dataset.target);
+    if (!input) return;
+    var showing = input.type === 'text';
+    input.type = showing ? 'password' : 'text';
+    btn.textContent = showing ? '👁' : '🙈';
+  });
+});
+</script>
+{% endblock %}

@@ -237,6 +237,14 @@ if IS_PRODUCTION:
 # crashing the whole app on startup.
 ADMIN_EMAIL = os.environ.get('ADMIN_EMAIL', '').strip()
 
+# ── Firebase / FCM (optional) ─────────────────────────────────────────────────
+# Set FIREBASE_CREDENTIALS_JSON to the full JSON text of your Firebase service
+# account key (downloaded from Firebase console → Project settings → Service
+# accounts → Generate new private key).  Leave it unset to disable FCM push
+# notifications without crashing the app — all push sends are best-effort and
+# silently skipped when this isn't configured.
+FIREBASE_CREDENTIALS_JSON = os.environ.get('FIREBASE_CREDENTIALS_JSON', '').strip()
+
 # ── Observability (optional) ──────────────────────────────────────────────────
 SENTRY_DSN = os.environ.get('SENTRY_DSN', '').strip()
 if SENTRY_DSN:

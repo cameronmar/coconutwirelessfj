@@ -41,12 +41,14 @@ class User(AbstractUser):
     username = None
     email = models.EmailField(unique=True)
 
-    ROLE_CLIENT = 'client'
-    ROLE_TRADIE = 'tradie'
-    ROLE_CHOICES = [
-        (ROLE_CLIENT, 'Client'),
-        (ROLE_TRADIE, 'Tradie'),
-        ('',          'Staff / Admin'),
+    ROLE_CLIENT   = 'client'
+    ROLE_TRADIE   = 'tradie'
+    ROLE_SUPPLIER = 'supplier'
+    ROLE_CHOICES  = [
+        (ROLE_CLIENT,   'Client'),
+        (ROLE_TRADIE,   'Tradie'),
+        (ROLE_SUPPLIER, 'Supplier'),
+        ('',            'Staff / Admin'),
     ]
     role   = models.CharField(max_length=10, choices=ROLE_CHOICES, blank=True, default='')
     mobile = models.CharField(max_length=20, blank=True)
@@ -59,6 +61,11 @@ class User(AbstractUser):
     notify_email_new_job_match = models.BooleanField(default=False, verbose_name='Email me when a new job matching my trades and towns is posted')
     notify_email_new_market_order    = models.BooleanField(default=True, verbose_name='Email me when someone orders from my Market listing')
     notify_email_market_order_update = models.BooleanField(default=True, verbose_name='Email me when my Market order is accepted or declined')
+
+    # Android app push notifications — stores the Firebase Cloud Messaging device
+    # token registered by the Android WebView app. Blank means the user has never
+    # logged in via the app (or the token hasn't been registered yet).
+    fcm_token = models.CharField(max_length=255, blank=True, default='')
 
     # Market founding seller program — first MARKET_FOUNDING_SLOTS sellers
     # (tradie or client) to post a Market listing get a badge + FJD $100
@@ -576,11 +583,13 @@ class QuotingAppointmentSlot(models.Model):
 
 
 class Message(models.Model):
-    task       = models.ForeignKey(Task, on_delete=models.CASCADE, related_name='messages')
-    sender     = models.ForeignKey(User, on_delete=models.CASCADE, related_name='sent_messages')
-    recipient  = models.ForeignKey(User, on_delete=models.CASCADE, related_name='received_messages')
-    body       = models.TextField()
-    created_at = models.DateTimeField(auto_now_add=True)
+    task         = models.ForeignKey(Task, on_delete=models.CASCADE, related_name='messages')
+    sender       = models.ForeignKey(User, on_delete=models.CASCADE, related_name='sent_messages')
+    recipient    = models.ForeignKey(User, on_delete=models.CASCADE, related_name='received_messages')
+    body         = models.TextField()
+    delivered_at = models.DateTimeField(null=True, blank=True)
+    read_at      = models.DateTimeField(null=True, blank=True)
+    created_at   = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         ordering = ['created_at']
@@ -1278,8 +1287,216 @@ class MarketOrder(models.Model):
         return f'{self.buyer} × {self.quantity} "{self.listing.title}" ({self.status})'
 
 
-# ── Signals ─────────────────────────────────────────────────────────────────────
+# ── Suppliers ────────────────────────────────────────────────────────────────
 
+class SupplyCategory(models.Model):
+    name       = models.CharField(max_length=50, unique=True)
+    icon       = models.CharField(max_length=10, blank=True)
+    slug       = models.SlugField(unique=True)
+    active     = models.BooleanField(default=True)
+    sort_order = models.PositiveIntegerField(default=0)
+
+    CHOICES_CACHE_KEY = 'supply_category_choices'
+
+    class Meta:
+        verbose_name        = 'Supply Category'
+        verbose_name_plural = 'Supply Categories'
+        ordering            = ['sort_order', 'name']
+
+    def __str__(self):
+        return self.name
+
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        cache.delete(self.CHOICES_CACHE_KEY)
+
+    def delete(self, *args, **kwargs):
+        super().delete(*args, **kwargs)
+        cache.delete(self.CHOICES_CACHE_KEY)
+
+    @classmethod
+    def get_choices(cls):
+        cached = cache.get(cls.CHOICES_CACHE_KEY)
+        if cached is not None:
+            return cached
+        rows = list(cls.objects.filter(active=True).order_by('sort_order', 'name').values_list('slug', 'icon', 'name'))
+        choices = [(slug, f'{icon} {name}'.strip()) for slug, icon, name in rows]
+        cache.set(cls.CHOICES_CACHE_KEY, choices, 300)
+        return choices
+
+    @classmethod
+    def get_label_map(cls):
+        return dict(cls.get_choices())
+
+
+class SupplierProfile(models.Model):
+    VERIFICATION_PENDING   = 'pending'
+    VERIFICATION_APPROVED  = 'approved'
+    VERIFICATION_REJECTED  = 'rejected'
+    VERIFICATION_SUSPENDED = 'suspended'
+    VERIFICATION_STATUS_CHOICES = [
+        (VERIFICATION_PENDING,   'Pending review'),
+        (VERIFICATION_APPROVED,  'Approved'),
+        (VERIFICATION_REJECTED,  'Rejected'),
+        (VERIFICATION_SUSPENDED, 'Suspended'),
+    ]
+
+    user              = models.OneToOneField(User, on_delete=models.CASCADE, related_name='supplier_profile')
+    business_name     = models.CharField(max_length=100, blank=True)
+    tin               = models.CharField(max_length=50, blank=True, verbose_name='TIN Number (optional)')
+    bio               = models.TextField(blank=True)
+    supply_categories = models.JSONField(default=list)
+    service_towns     = models.JSONField(default=list)
+
+    tin_letter             = models.FileField(upload_to='supplier_documents/', blank=True, null=True)
+    business_registration  = models.FileField(upload_to='supplier_documents/', blank=True, null=True)
+    import_export_licence  = models.FileField(upload_to='supplier_documents/', blank=True, null=True)
+
+    verification_status = models.CharField(
+        max_length=20, choices=VERIFICATION_STATUS_CHOICES,
+        default=VERIFICATION_PENDING, db_index=True,
+    )
+    documents_verified  = models.BooleanField(default=False)
+    verification_notes  = models.TextField(blank=True)
+
+    is_founding_member             = models.BooleanField(default=False)
+    founding_member_credit_balance = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
+
+    class Meta:
+        verbose_name        = 'Supplier Profile'
+        verbose_name_plural = 'Supplier Profiles'
+
+    def __str__(self):
+        return self.business_name or self.user.full_name
+
+    def save(self, *args, **kwargs):
+        self.documents_verified = (self.verification_status == self.VERIFICATION_APPROVED)
+        super().save(*args, **kwargs)
+
+    def can_receive_enquiries(self):
+        return self.verification_status not in (self.VERIFICATION_REJECTED, self.VERIFICATION_SUSPENDED)
+
+    def enquiry_block_reason(self):
+        if self.verification_status == self.VERIFICATION_REJECTED:
+            return 'Your supplier account has been rejected. Please contact support.'
+        if self.verification_status == self.VERIFICATION_SUSPENDED:
+            return 'Your supplier account is currently suspended. Please contact support.'
+        return ''
+
+    def supply_categories_display(self):
+        lookup = SupplyCategory.get_label_map()
+        return [lookup.get(s, s) for s in (self.supply_categories or [])]
+
+    def service_towns_display(self):
+        return ', '.join(self.service_towns or [])
+
+    def public_completed_enquiry_count(self):
+        return SupplierEnquiry.objects.filter(supplier=self.user, status=SupplierEnquiry.STATUS_ACCEPTED).count()
+
+    def get_public_rating_breakdown(self):
+        from django.db.models import Avg
+        reviews = PublicReview.objects.filter(ratee=self.user)
+        if not reviews.exists():
+            return None
+        breakdown = reviews.aggregate(
+            reliability_punctuality=Avg('reliability_punctuality'),
+            quote_price_accuracy=Avg('quote_price_accuracy'),
+            value_for_money=Avg('value_for_money'),
+            service_quality_workmanship=Avg('service_quality_workmanship'),
+            communication_after_service=Avg('communication_after_service'),
+            timeline_schedule_delivery=Avg('timeline_schedule_delivery'),
+        )
+        if breakdown['reliability_punctuality']:
+            values = [v for v in breakdown.values() if v is not None]
+            breakdown['overall'] = sum(values) / len(values)
+        return breakdown
+
+
+class SupplierEnquiry(models.Model):
+    STATUS_OPEN     = 'open'
+    STATUS_QUOTED   = 'quoted'
+    STATUS_ACCEPTED = 'accepted'
+    STATUS_CLOSED   = 'closed'
+    STATUS_CHOICES  = [
+        (STATUS_OPEN,     'Open'),
+        (STATUS_QUOTED,   'Quoted'),
+        (STATUS_ACCEPTED, 'Accepted'),
+        (STATUS_CLOSED,   'Closed'),
+    ]
+
+    client      = models.ForeignKey(User, on_delete=models.CASCADE, related_name='supplier_enquiries')
+    supplier    = models.ForeignKey(User, on_delete=models.CASCADE, related_name='received_enquiries')
+    title       = models.CharField(max_length=200)
+    description = models.TextField()
+    town        = models.CharField(max_length=50, choices=TOWN_CHOICES)
+    status      = models.CharField(max_length=10, choices=STATUS_CHOICES, default=STATUS_OPEN, db_index=True)
+    created_at  = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering            = ['-created_at']
+        verbose_name        = 'Supplier Enquiry'
+        verbose_name_plural = 'Supplier Enquiries'
+
+    def __str__(self):
+        return f'Enquiry: "{self.title}" ({self.client} → {self.supplier})'
+
+
+class SupplierQuote(models.Model):
+    STATUS_PENDING               = 'pending'
+    STATUS_ACCEPTED              = 'accepted'
+    STATUS_MODIFICATION_REQUESTED = 'modification_requested'
+    STATUS_REJECTED              = 'rejected'
+    STATUS_CHOICES = [
+        (STATUS_PENDING,                'Pending'),
+        (STATUS_ACCEPTED,               'Accepted'),
+        (STATUS_MODIFICATION_REQUESTED, 'Modification Requested'),
+        (STATUS_REJECTED,               'Rejected'),
+    ]
+
+    enquiry             = models.ForeignKey(SupplierEnquiry, on_delete=models.CASCADE, related_name='quotes')
+    supplier            = models.ForeignKey(User, on_delete=models.CASCADE, related_name='supplier_quotes')
+    items               = models.JSONField(default=list)
+    vep_subtotal        = models.DecimalField(max_digits=10, decimal_places=2)
+    vat_rate            = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('9.00'))
+    vat_amount          = models.DecimalField(max_digits=10, decimal_places=2)
+    platform_fee_rate   = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('3.00'))
+    platform_fee_amount = models.DecimalField(max_digits=10, decimal_places=2)
+    total               = models.DecimalField(max_digits=10, decimal_places=2)
+    message             = models.TextField(blank=True)
+    lead_time           = models.CharField(max_length=100, blank=True)
+    valid_until         = models.DateField(null=True, blank=True)
+    status              = models.CharField(max_length=25, choices=STATUS_CHOICES, default=STATUS_PENDING, db_index=True)
+    modification_note   = models.TextField(blank=True)
+    created_at          = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering            = ['-created_at']
+        verbose_name        = 'Supplier Quote'
+        verbose_name_plural = 'Supplier Quotes'
+
+    def __str__(self):
+        return f'Quote FJD ${self.total} on "{self.enquiry.title}" ({self.status})'
+
+
+class SupplierMessage(models.Model):
+    enquiry      = models.ForeignKey(SupplierEnquiry, on_delete=models.CASCADE, related_name='messages')
+    sender       = models.ForeignKey(User, on_delete=models.CASCADE, related_name='sent_supplier_messages')
+    recipient    = models.ForeignKey(User, on_delete=models.CASCADE, related_name='received_supplier_messages')
+    body         = models.TextField()
+    delivered_at = models.DateTimeField(null=True, blank=True)
+    read_at      = models.DateTimeField(null=True, blank=True)
+    created_at   = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering            = ['created_at']
+        verbose_name        = 'Supplier Message'
+        verbose_name_plural = 'Supplier Messages'
+
+    def __str__(self):
+        return f'Msg from {self.sender} on enquiry #{self.enquiry_id}'
+
+
+# ── Signals ─────────────────────────────────────────────────────────────────────
 from django.db.models.signals import pre_delete
 from django.dispatch import receiver
 

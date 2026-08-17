@@ -1,0 +1,83 @@
+{% extends "marketplace/base.html" %}
+{% block title %}Find a Supplier – The Coconut Wireless Network{% endblock %}
+
+{% block extra_css %}
+<style>
+.pro-hdr{background:var(--white);border-bottom:1px solid #dde8ef;padding:20px 0;}
+.pro-hdr h1{margin:0 0 4px;font-size:1.5rem;}
+.pro-hdr p{margin:0 0 16px;color:var(--muted);font-size:.9rem;}
+.pro-filters{display:flex;gap:10px;flex-wrap:wrap;}
+.pro-filters input,.pro-filters select{padding:10px 14px;border-radius:10px;border:1.5px solid #cce4ef;font-size:.88rem;outline:none;}
+.pro-filters input:focus,.pro-filters select:focus{border-color:var(--blue);}
+.pro-filters button{background:var(--blue);color:var(--white);border:none;padding:10px 20px;border-radius:10px;font-size:.88rem;font-weight:700;cursor:pointer;}
+.pro-grid{display:grid;gap:18px;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));padding:26px 0 30px;}
+.pc{background:var(--white);border-radius:16px;box-shadow:0 4px 18px rgba(0,80,120,.08);overflow:hidden;text-decoration:none;color:inherit;display:block;transition:box-shadow .2s;padding:18px;}
+.pc:hover{box-shadow:0 8px 28px rgba(0,80,120,.14);}
+.pc-name{font-size:1.02rem;font-weight:700;margin-bottom:2px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
+.pc-business{font-size:.82rem;color:var(--muted);margin-bottom:8px;}
+.pc-trades{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:9px;}
+.pc-trade{background:var(--blue-light);color:var(--blue);border-radius:16px;padding:3px 10px;font-size:.72rem;font-weight:700;}
+.pc-town{font-size:.8rem;color:var(--muted);margin-bottom:6px;}
+.pc-rating{font-size:.85rem;font-weight:700;color:var(--blue);}
+.pc-rating .count{font-size:.76rem;color:var(--muted);font-weight:400;}
+.empty{text-align:center;padding:50px 20px;color:var(--muted);}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="pro-hdr">
+  <div class="container">
+    <h1>Find a Supplier</h1>
+    <p>Browse verified suppliers across Fiji. Send an enquiry to get an itemised quote for your goods or materials.</p>
+    <form method="get" class="pro-filters">
+      <input type="text" name="q" placeholder="Search by name or business…" value="{{ keyword_filter }}">
+      <select name="category">
+        <option value="">All categories</option>
+        {% for val, label in category_choices %}
+          <option value="{{ val }}" {% if val == category_filter %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+      <select name="town">
+        <option value="">All towns</option>
+        {% for val, label in town_choices %}
+          <option value="{{ val }}" {% if val == town_filter %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+      <button type="submit">Search</button>
+    </form>
+  </div>
+</div>
+
+<div class="container">
+  <div class="pro-grid">
+    {% for profile in profiles %}
+    <a href="{% url 'supplier_profile' profile.user.pk %}" class="pc">
+      <div class="pc-name">
+        {{ profile.user.full_name }}
+        {% if profile.verification_status == 'pending' %}<span class="chip chip-pending" title="Pending verification">⏳ Pending</span>{% endif %}
+      </div>
+      {% if profile.business_name %}<div class="pc-business">{{ profile.business_name }}</div>{% endif %}
+      <div class="pc-trades">
+        {% for label in profile.supply_categories_display %}
+          <span class="pc-trade">{{ label }}</span>
+        {% endfor %}
+      </div>
+      <div class="pc-town">📍 {{ profile.service_towns_display }}</div>
+      <div class="pc-rating">
+        {% if profile.overall_rating %}
+          ⭐ {{ profile.overall_rating }} / 5 <span class="count">({{ profile.review_count }} review{{ profile.review_count|pluralize }})</span>
+        {% else %}
+          <span class="count">No reviews yet</span>
+        {% endif %}
+      </div>
+    </a>
+    {% empty %}
+    <div class="empty" style="grid-column:1/-1;">
+      <p style="font-size:1.5rem">🔍</p>
+      <p>No suppliers match yet.</p>
+    </div>
+    {% endfor %}
+  </div>
+  {% include "marketplace/_pagination.html" %}
+</div>
+{% endblock %}

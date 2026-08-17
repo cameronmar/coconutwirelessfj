@@ -9,7 +9,7 @@ from django.db.models import F
 
 from .models import (
     PlatformSettings, PlatformFee, Invoice, InvoiceLine, InvoiceNotification, Quote, Task,
-    PlatformNotice, TradieProfile, User,
+    PlatformNotice, TradieProfile, User, SupplierEnquiry, SupplierQuote, SupplierMessage,
 )
 
 
@@ -809,13 +809,52 @@ def notify_admin(subject, body, reply_to=None):
         return False
 
 
+def send_fcm_push(recipient, title, body):
+    """
+    Send a Firebase Cloud Messaging push notification to the user's Android
+    device if they have a stored FCM token (i.e. they've used the app and the
+    token registration succeeded). Best-effort — never raises; failures are
+    logged to stderr/Sentry but the calling code always continues.
+    """
+    from django.conf import settings as django_settings
+
+    token = getattr(recipient, 'fcm_token', '').strip()
+    if not token:
+        return False
+
+    credentials_json = getattr(django_settings, 'FIREBASE_CREDENTIALS_JSON', '').strip()
+    if not credentials_json:
+        return False
+
+    try:
+        import json as _json
+        import firebase_admin
+        from firebase_admin import credentials, messaging
+
+        if not firebase_admin._apps:
+            cred = credentials.Certificate(_json.loads(credentials_json))
+            firebase_admin.initialize_app(cred)
+
+        messaging.send(messaging.Message(
+            notification=messaging.Notification(title=title, body=body),
+            token=token,
+        ))
+        return True
+    except Exception as exc:
+        import sys
+        import traceback
+        print(f'send_fcm_push: failed for user {recipient.pk}: {exc!r}', flush=True)
+        traceback.print_exc()
+        sys.stderr.flush()
+        try:
+            import sentry_sdk
+            sentry_sdk.capture_exception(exc)
+        except ImportError:
+            pass
+        return False
+
+
 def _send_email_notice(recipient, subject, body, notice_type):
-    """
-    Send a plain-text email and, only on success, log a matching email-channel
-    PlatformNotice for the audit trail (same per-channel logging pattern used
-    elsewhere). Best-effort — failures are swallowed, never raised, since these
-    are all optional extra-channel notifications gated by a user preference.
-    """
     from django.conf import settings as django_settings
     from django.core.mail import send_mail
 
@@ -869,6 +908,7 @@ def notify_client_new_quote(quote):
     )
     if client.notify_email_new_quote:
         _send_email_notice(client, subject, body, PlatformNotice.TYPE_NEW_QUOTE)
+    send_fcm_push(client, subject, f'{quote.tradie.full_name} sent a quote of FJD ${quote.price} for "{task.title}".')
 
 
 def notify_message_recipient(message):
@@ -879,8 +919,6 @@ def notify_message_recipient(message):
     User.notify_email_new_message.
     """
     recipient = message.recipient
-    if not recipient.notify_email_new_message:
-        return
     subject = f'New message from {message.sender.full_name}'
     body = (
         f'Bula {recipient.first_name},\n\n'
@@ -889,7 +927,9 @@ def notify_message_recipient(message):
         f'Log in to reply.\n\n'
         f'Vinaka,\nThe Coconut Wireless Network Team'
     )
-    _send_email_notice(recipient, subject, body, PlatformNotice.TYPE_NEW_MESSAGE)
+    if recipient.notify_email_new_message:
+        _send_email_notice(recipient, subject, body, PlatformNotice.TYPE_NEW_MESSAGE)
+    send_fcm_push(recipient, subject, f'{message.sender.full_name}: {message.body[:80]}')
 
 
 def notify_matching_tradies_new_job(task):
@@ -932,6 +972,7 @@ def notify_matching_tradies_new_job(task):
             channel=PlatformNotice.CHANNEL_IN_PLATFORM, subject=subject, body=body,
         )
         _send_email_notice(profile.user, subject, body, PlatformNotice.TYPE_NEW_JOB_MATCH)
+        send_fcm_push(profile.user, subject, f'New job in {task.get_town_display()}: {task.title[:60]}')
 
 
 def notify_client_migrated_to_tradie(user):
@@ -984,6 +1025,7 @@ def notify_seller_new_market_order(order):
     )
     if seller.notify_email_new_market_order:
         _send_email_notice(seller, subject, body, PlatformNotice.TYPE_NEW_MARKET_ORDER)
+    send_fcm_push(seller, subject, f'{order.buyer.full_name} ordered {order.quantity} × "{listing.title}".')
 
 
 def notify_buyer_market_order_update(order):
@@ -1007,3 +1049,61 @@ def notify_buyer_market_order_update(order):
     )
     if buyer.notify_email_market_order_update:
         _send_email_notice(buyer, subject, body, PlatformNotice.TYPE_MARKET_ORDER_UPDATE)
+    send_fcm_push(buyer, subject, f'Your order of "{listing.title}" was {status_label.lower()}.')
+
+
+def notify_supplier_new_enquiry(enquiry):
+    """Notify supplier of a new enquiry from a client."""
+    supplier = enquiry.supplier
+    subject = f'New enquiry: "{enquiry.title}"'
+    body = (
+        f'Bula {supplier.first_name},\n\n'
+        f'{enquiry.client.full_name} has sent you an enquiry about "{enquiry.title}".\n\n'
+        f'{enquiry.description}\n\n'
+        f'Delivery/pickup location: {enquiry.get_town_display()}\n\n'
+        f'Log in to view the enquiry and send a quote.\n\nVinaka,\nThe Coconut Wireless Network Team'
+    )
+    PlatformNotice.objects.create(
+        recipient=supplier, notice_type=PlatformNotice.TYPE_NEW_QUOTE,
+        channel=PlatformNotice.CHANNEL_IN_PLATFORM, subject=subject, body=body,
+    )
+    _send_email_notice(supplier, subject, body, PlatformNotice.TYPE_NEW_QUOTE)
+    send_fcm_push(supplier, subject, f'{enquiry.client.full_name} sent an enquiry: {enquiry.title[:60]}')
+
+
+def notify_client_new_supplier_quote(quote):
+    """Notify client that the supplier sent a quote on their enquiry."""
+    client = quote.enquiry.client
+    subject = f'Quote received for "{quote.enquiry.title}"'
+    body = (
+        f'Bula {client.first_name},\n\n'
+        f'{quote.supplier.full_name} sent you a quote of FJD ${quote.total:.2f} for "{quote.enquiry.title}".\n\n'
+        + (f'{quote.message}\n\n' if quote.message else '')
+        + f'Log in to view the full itemised quote and respond.\n\nVinaka,\nThe Coconut Wireless Network Team'
+    )
+    PlatformNotice.objects.create(
+        recipient=client, notice_type=PlatformNotice.TYPE_NEW_QUOTE,
+        channel=PlatformNotice.CHANNEL_IN_PLATFORM, subject=subject, body=body,
+    )
+    _send_email_notice(client, subject, body, PlatformNotice.TYPE_NEW_QUOTE)
+    send_fcm_push(client, subject, f'{quote.supplier.full_name} quoted FJD ${quote.total:.2f} for "{quote.enquiry.title}".')
+
+
+def notify_supplier_quote_response(quote):
+    """Notify supplier that the client responded to their quote (accepted/modify/rejected)."""
+    supplier = quote.supplier
+    status_label = quote.get_status_display()
+    subject = f'Your quote was {status_label.lower()}: "{quote.enquiry.title}"'
+    body = (
+        f'Bula {supplier.first_name},\n\n'
+        f'{quote.enquiry.client.full_name} has {status_label.lower()} your quote of FJD ${quote.total:.2f} '
+        f'for "{quote.enquiry.title}".\n\n'
+        + (f'Modification requested:\n{quote.modification_note}\n\n' if quote.modification_note else '')
+        + f'Log in to view the full enquiry.\n\nVinaka,\nThe Coconut Wireless Network Team'
+    )
+    PlatformNotice.objects.create(
+        recipient=supplier, notice_type=PlatformNotice.TYPE_NEW_QUOTE,
+        channel=PlatformNotice.CHANNEL_IN_PLATFORM, subject=subject, body=body,
+    )
+    _send_email_notice(supplier, subject, body, PlatformNotice.TYPE_NEW_QUOTE)
+    send_fcm_push(supplier, subject, f'Quote {status_label.lower()} by {quote.enquiry.client.full_name}.')

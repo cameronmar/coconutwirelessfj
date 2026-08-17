@@ -8,7 +8,7 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 
 from .constants import TOWN_CHOICES, EXPERIENCE_CHOICES, FOUNDING_MEMBER_SLOTS, FOUNDING_MEMBER_CREDIT
-from .models import User, TradieProfile, Task, Quote, Message, TradeCategory, TaskPhoto, MarketListing, MarketOrder, PlatformSettings
+from .models import User, TradieProfile, Task, Quote, Message, TradeCategory, TaskPhoto, MarketListing, MarketOrder, PlatformSettings, SupplyCategory, SupplierProfile
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -801,4 +801,109 @@ class MarketOrderForm(forms.Form):
                 self.add_error('delivery_town', 'Select a delivery town.')
             elif self.listing and town not in (self.listing.delivery_towns or []):
                 self.add_error('delivery_town', "This town isn't in the seller's delivery area.")
+        return cd
+
+
+# ── Supplier forms ────────────────────────────────────────────────────────────
+
+class SupplierRegistrationForm(forms.Form):
+    first_name       = forms.CharField(max_length=50,  widget=_input('e.g. Josaia'))
+    last_name        = forms.CharField(max_length=50,  widget=_input('e.g. Vuli'))
+    email            = forms.EmailField(widget=_input('you@example.fj', type_='email'))
+    mobile           = forms.CharField(max_length=20,  widget=_input('+679 XXX XXXX'))
+    town             = forms.ChoiceField(choices=[('', 'Select town…')] + list(TOWN_CHOICES), widget=_select())
+    password         = forms.CharField(widget=forms.PasswordInput(attrs={'class': 'form-input', 'placeholder': 'At least 8 characters'}))
+    password_confirm = forms.CharField(label='Confirm password', widget=forms.PasswordInput(attrs={'class': 'form-input', 'placeholder': 'Repeat password'}))
+    business_name    = forms.CharField(max_length=100, required=False, label='Business Name (optional)', widget=_input('e.g. Pacific Supplies Ltd'))
+    tin              = forms.CharField(max_length=50, required=False, label='TIN Number (optional)', widget=_input('e.g. P033-12345'))
+    bio              = forms.CharField(required=False, widget=forms.Textarea(attrs={'class': 'form-input', 'rows': 4, 'placeholder': 'Describe your business, the products you supply, and your service area…'}))
+    supply_categories = forms.MultipleChoiceField(choices=[], widget=forms.CheckboxSelectMultiple)
+    service_towns     = forms.MultipleChoiceField(choices=TOWN_CHOICES, widget=forms.CheckboxSelectMultiple)
+    tin_letter                = forms.FileField(label='TIN Letter', help_text='Upload your FRCA TIN letter (PDF, JPG, or PNG, up to 10MB). Required.')
+    business_registration     = forms.FileField(label='Business Registration', required=False, help_text='Optional.')
+    import_export_licence     = forms.FileField(label='Import/Export Licence', required=False, help_text='Optional.')
+    accepted_terms            = forms.BooleanField(
+        required=True,
+        error_messages={'required': 'You must accept the Terms & Conditions, Privacy Policy and Platform Rules to register.'}
+    )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields['supply_categories'].choices = SupplyCategory.get_choices()
+
+    def clean_email(self):
+        email = self.cleaned_data['email'].lower()
+        if User.objects.filter(email=email).exists():
+            raise ValidationError('An account with this email already exists.')
+        return email
+
+    def clean_tin_letter(self):
+        return _clean_verification_document(self.cleaned_data.get('tin_letter'))
+
+    def clean_business_registration(self):
+        return _clean_verification_document(self.cleaned_data.get('business_registration'))
+
+    def clean_import_export_licence(self):
+        return _clean_verification_document(self.cleaned_data.get('import_export_licence'))
+
+    def clean(self):
+        cd = super().clean()
+        p1, p2 = cd.get('password'), cd.get('password_confirm')
+        if p1 and p2 and p1 != p2:
+            raise ValidationError('Passwords do not match.')
+        if not cd.get('supply_categories'):
+            raise ValidationError('Please select at least one supply category.')
+        if not cd.get('service_towns'):
+            raise ValidationError('Please select at least one service town.')
+        return cd
+
+    def save(self, request=None):
+        cd = self.cleaned_data
+        with transaction.atomic():
+            user = User.objects.create_user(
+                email=cd['email'],
+                password=cd['password'],
+                first_name=cd['first_name'],
+                last_name=cd['last_name'],
+                mobile=cd['mobile'],
+                town=cd['town'],
+                role=User.ROLE_SUPPLIER,
+            )
+            profile = SupplierProfile(
+                user=user,
+                business_name=cd.get('business_name', ''),
+                tin=cd.get('tin', ''),
+                bio=cd.get('bio', ''),
+                supply_categories=list(cd.get('supply_categories', [])),
+                service_towns=list(cd.get('service_towns', [])),
+            )
+            for field in ('tin_letter', 'business_registration', 'import_export_licence'):
+                if cd.get(field):
+                    setattr(profile, field, cd[field])
+            profile.save()
+        return user
+
+
+class SupplierEnquiryForm(forms.Form):
+    title       = forms.CharField(max_length=200, widget=_input('e.g. 500kg rice, 20 boxes of cooking oil…'))
+    description = forms.CharField(widget=forms.Textarea(attrs={'class': 'form-input', 'rows': 5, 'placeholder': 'Describe what you need in detail — quantities, specifications, delivery requirements…'}))
+    town        = forms.ChoiceField(choices=[('', 'Select delivery/pickup town…')] + list(TOWN_CHOICES), widget=_select())
+
+
+class SupplierQuoteResponseForm(forms.Form):
+    STATUS_CHOICES = [
+        ('accepted',              'Accept'),
+        ('modification_requested', 'Request Modification'),
+        ('rejected',              'Reject'),
+    ]
+    status            = forms.ChoiceField(choices=STATUS_CHOICES, widget=_select())
+    modification_note = forms.CharField(
+        required=False,
+        widget=forms.Textarea(attrs={'class': 'form-input', 'rows': 3, 'placeholder': 'Describe what changes you need…'}),
+    )
+
+    def clean(self):
+        cd = super().clean()
+        if cd.get('status') == 'modification_requested' and not (cd.get('modification_note') or '').strip():
+            raise ValidationError('Please describe what modifications you need.')
         return cd

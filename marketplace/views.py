@@ -44,6 +44,9 @@ from .forms import (
     QuotingAppointmentForm,
     ServiceAreaForm,
     SetNewPasswordForm,
+    SupplierEnquiryForm,
+    SupplierQuoteResponseForm,
+    SupplierRegistrationForm,
     TaskDateForm,
     TaskForm,
     TradieRegistrationForm,
@@ -61,6 +64,11 @@ from .models import (
     QuotingAppointment,
     QuotingAppointmentSlot,
     Sponsor,
+    SupplierEnquiry,
+    SupplierProfile,
+    SupplierMessage,
+    SupplierQuote,
+    SupplyCategory,
     Task,
     TermsAcceptance,
     TradeCategory,
@@ -78,9 +86,13 @@ from .utils import (
     notify_admin,
     notify_buyer_market_order_update,
     notify_client_new_quote,
+    notify_client_new_supplier_quote,
     notify_matching_tradies_new_job,
     notify_message_recipient,
     notify_seller_new_market_order,
+    notify_supplier_new_enquiry,
+    notify_supplier_quote_response,
+    send_fcm_push,
     send_welcome_notice,
 )
 
@@ -481,6 +493,8 @@ def password_reset_confirm(request, uidb64, token):
 def dashboard(request):
     if request.user.role == User.ROLE_TRADIE:
         return redirect('tradie_dashboard')
+    elif request.user.role == 'supplier':
+        return redirect('supplier_dashboard')
     return redirect('client_dashboard')
 
 
@@ -1215,6 +1229,22 @@ def notification_settings(request):
 
 
 @login_required
+@require_POST
+def register_fcm_token(request):
+    """Receive the FCM device token from the Android WebView app and store it."""
+    import json
+    try:
+        data = json.loads(request.body)
+        token = data.get('fcm_token', '').strip()
+    except (json.JSONDecodeError, ValueError):
+        return JsonResponse({'ok': False, 'error': 'invalid json'}, status=400)
+    if token:
+        request.user.fcm_token = token
+        request.user.save(update_fields=['fcm_token'])
+    return JsonResponse({'ok': True})
+
+
+@login_required
 def change_password(request):
     form = ChangePasswordForm(request.POST or None, user=request.user)
     if request.method == 'POST' and form.is_valid():
@@ -1274,6 +1304,12 @@ def conversation(request, tpk, opk):
     ).filter(
         Q(sender=u, recipient=other_user) | Q(sender=other_user, recipient=u)
     ).order_by('created_at')
+
+    # Mark unread incoming messages as delivered + read now that the recipient is viewing them
+    _now = timezone.now()
+    unread_qs = chat_messages.filter(recipient=u, read_at__isnull=True)
+    unread_qs.filter(delivered_at__isnull=True).update(delivered_at=_now)
+    unread_qs.update(read_at=_now)
 
     convs = _build_conversations(u)
     return render(request, 'marketplace/messages.html', {
@@ -1549,3 +1585,364 @@ def calculate_market_price(request):
         return JsonResponse({'valid': True, **{k: str(v) for k, v in breakdown.items()}})
     except Exception:
         return JsonResponse({'valid': False})
+
+
+# ── Supplier registration ──────────────────────────────────────────────────────
+
+def register_supplier(request):
+    if request.user.is_authenticated:
+        return redirect('dashboard')
+    form = SupplierRegistrationForm(request.POST or None, request.FILES or None)
+    supply_choices = SupplyCategory.get_choices()
+    if request.method == 'POST' and form.is_valid():
+        user = form.save(request=request)
+        TermsAcceptance.objects.create(
+            user=user,
+            terms_version='1.0',
+            ip_address=request.META.get('REMOTE_ADDR'),
+            user_agent=request.META.get('HTTP_USER_AGENT', ''),
+            accepted_platform_circumvention=False,
+            accepted_invoicing_terms=False,
+        )
+        login(request, user)
+        send_welcome_notice(user)
+        notify_admin(
+            f'New supplier pending approval: {user.full_name}',
+            f'Supplier {user.full_name} ({user.email}) registered and is pending document verification.',
+        )
+        flash.success(request, 'Your supplier account is created and pending document verification.')
+        return redirect('supplier_dashboard')
+    return render(request, 'marketplace/register_supplier.html', {
+        'form': form,
+        'supply_choices': supply_choices,
+        'town_choices': TOWN_CHOICES,
+    })
+
+
+# ── Supplier dashboard ─────────────────────────────────────────────────────────
+
+@login_required
+def supplier_dashboard(request):
+    if request.user.role != 'supplier':
+        return redirect('dashboard')
+    try:
+        profile = request.user.supplier_profile
+    except SupplierProfile.DoesNotExist:
+        return redirect('home')
+
+    enquiries = SupplierEnquiry.objects.filter(supplier=request.user).select_related('client')
+    pending  = [e for e in enquiries if e.status == SupplierEnquiry.STATUS_OPEN]
+    quoted   = [e for e in enquiries if e.status == SupplierEnquiry.STATUS_QUOTED]
+    accepted = [e for e in enquiries if e.status == SupplierEnquiry.STATUS_ACCEPTED]
+    closed   = [e for e in enquiries if e.status == SupplierEnquiry.STATUS_CLOSED]
+
+    return render(request, 'marketplace/supplier_dashboard.html', {
+        'profile': profile,
+        'pending_enquiries': pending,
+        'quoted_enquiries': quoted,
+        'accepted_enquiries': accepted,
+        'closed_enquiries': closed,
+        'total_enquiries': enquiries.count(),
+    })
+
+
+# ── Browse suppliers ───────────────────────────────────────────────────────────
+
+def browse_suppliers(request):
+    keyword  = request.GET.get('q', '').strip()
+    category = request.GET.get('category', '').strip()
+    town     = request.GET.get('town', '').strip()
+
+    profiles = SupplierProfile.objects.filter(
+        verification_status__in=[SupplierProfile.VERIFICATION_PENDING, SupplierProfile.VERIFICATION_APPROVED]
+    ).select_related('user')
+
+    if keyword:
+        profiles = profiles.filter(
+            Q(business_name__icontains=keyword) |
+            Q(bio__icontains=keyword) |
+            Q(user__first_name__icontains=keyword) |
+            Q(user__last_name__icontains=keyword)
+        )
+
+    profiles = list(profiles.order_by('verification_status', 'business_name'))
+
+    if category:
+        profiles = [p for p in profiles if category in (p.supply_categories or [])]
+    if town:
+        profiles = [p for p in profiles if town in (p.service_towns or [])]
+
+    paginator = Paginator(profiles, 20)
+    page_obj  = paginator.get_page(request.GET.get('page'))
+    page_profiles = list(page_obj)
+    pids = [p.user_id for p in page_profiles]
+    rating_data = (
+        PublicReview.objects.filter(ratee_id__in=pids)
+        .values('ratee_id')
+        .annotate(
+            overall=Avg('reliability_punctuality'),
+            count=Count('id'),
+        )
+    )
+    rating_map = {r['ratee_id']: r for r in rating_data}
+    for p in page_profiles:
+        rd = rating_map.get(p.user_id, {})
+        p.overall_rating = round(rd.get('overall') or 0, 1)
+        p.review_count   = rd.get('count', 0)
+
+    qs = request.GET.copy()
+    qs.pop('page', None)
+    querystring_prefix = ('&' + qs.urlencode()) if qs else ''
+
+    return render(request, 'marketplace/browse_suppliers.html', {
+        'profiles': page_profiles,
+        'page_obj': page_obj,
+        'querystring_prefix': querystring_prefix,
+        'category_filter': category,
+        'town_filter': town,
+        'keyword_filter': keyword,
+        'category_choices': SupplyCategory.get_choices(),
+        'town_choices': TOWN_CHOICES,
+    })
+
+
+# ── Supplier public profile ────────────────────────────────────────────────────
+
+def supplier_profile(request, pk):
+    supplier_user = get_object_or_404(User, pk=pk, role=User.ROLE_SUPPLIER)
+    profile = get_object_or_404(SupplierProfile, user=supplier_user)
+    breakdown = profile.get_public_rating_breakdown()
+    criteria_data = []
+    if breakdown:
+        for key, label in PUBLIC_REVIEW_CRITERIA:
+            avg = breakdown.get(key) or 0
+            criteria_data.append({'label': label, 'avg': round(avg, 1), 'pct': round(avg / 5 * 100, 1)})
+    reviews = PublicReview.objects.filter(ratee=supplier_user).select_related('rater', 'task').order_by('-created_at')
+    can_enquire = (
+        request.user.is_authenticated
+        and request.user != supplier_user
+        and profile.can_receive_enquiries()
+    )
+    return render(request, 'marketplace/supplier_profile.html', {
+        'supplier': supplier_user,
+        'profile': profile,
+        'breakdown': breakdown,
+        'criteria_data': criteria_data,
+        'reviews': reviews,
+        'can_enquire': can_enquire,
+    })
+
+
+# ── Send enquiry ───────────────────────────────────────────────────────────────
+
+@login_required
+def send_enquiry(request, supplier_pk):
+    supplier_user = get_object_or_404(User, pk=supplier_pk, role=User.ROLE_SUPPLIER)
+    profile = get_object_or_404(SupplierProfile, user=supplier_user)
+    if not profile.can_receive_enquiries():
+        flash.error(request, 'This supplier is not currently accepting enquiries.')
+        return redirect('supplier_profile', pk=supplier_pk)
+    if request.user == supplier_user:
+        raise PermissionDenied
+
+    form = SupplierEnquiryForm(request.POST or None)
+    if request.method == 'POST' and form.is_valid():
+        cd = form.cleaned_data
+        enquiry = SupplierEnquiry.objects.create(
+            client=request.user,
+            supplier=supplier_user,
+            title=cd['title'],
+            description=cd['description'],
+            town=cd['town'],
+        )
+        notify_supplier_new_enquiry(enquiry)
+        flash.success(request, 'Your enquiry has been sent.')
+        return redirect('enquiry_detail', pk=enquiry.pk)
+
+    return render(request, 'marketplace/send_enquiry.html', {
+        'form': form,
+        'supplier': supplier_user,
+        'profile': profile,
+        'town_choices': TOWN_CHOICES,
+    })
+
+
+# ── Enquiry detail ─────────────────────────────────────────────────────────────
+
+@login_required
+def enquiry_detail(request, pk):
+    enquiry = get_object_or_404(SupplierEnquiry, pk=pk)
+    if request.user not in (enquiry.client, enquiry.supplier):
+        raise PermissionDenied
+    quotes = enquiry.quotes.select_related('supplier').order_by('created_at')
+    messages_qs = enquiry.messages.select_related('sender').order_by('created_at')
+    is_supplier = (request.user == enquiry.supplier)
+
+    response_form = None
+    if not is_supplier:
+        response_form = SupplierQuoteResponseForm()
+
+    return render(request, 'marketplace/enquiry_detail.html', {
+        'enquiry': enquiry,
+        'quotes': quotes,
+        'chat_messages': messages_qs,
+        'is_supplier': is_supplier,
+        'response_form': response_form,
+    })
+
+
+# ── Submit supplier quote ──────────────────────────────────────────────────────
+
+@login_required
+@require_POST
+def submit_supplier_quote(request, pk):
+    enquiry = get_object_or_404(SupplierEnquiry, pk=pk, supplier=request.user)
+    if request.user.role != 'supplier':
+        raise PermissionDenied
+    try:
+        profile = request.user.supplier_profile
+    except SupplierProfile.DoesNotExist:
+        raise PermissionDenied
+    if not profile.can_receive_enquiries():
+        flash.error(request, profile.enquiry_block_reason())
+        return redirect('enquiry_detail', pk=pk)
+    if enquiry.status != SupplierEnquiry.STATUS_OPEN:
+        # Mirrors the UI, which only ever shows the quote form while the
+        # enquiry is open — enforced here too so a stale tab (or a direct
+        # POST) can't silently revert an already-accepted/closed enquiry
+        # back to 'quoted' out from under the client.
+        flash.error(request, 'This enquiry is no longer open for new quotes.')
+        return redirect('enquiry_detail', pk=pk)
+
+    import json as _json
+    from decimal import ROUND_HALF_UP
+
+    try:
+        items_raw = _json.loads(request.POST.get('items_json', '[]'))
+    except (_json.JSONDecodeError, ValueError):
+        items_raw = []
+
+    items = []
+    vep_subtotal = Decimal('0.00')
+    for row in items_raw:
+        try:
+            qty   = Decimal(str(row.get('qty', 0)))
+            price = Decimal(str(row.get('unit_price_vep', 0)))
+            line  = (qty * price).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+        except Exception:
+            continue
+        items.append({
+            'description':     str(row.get('description', '')).strip(),
+            'qty':             str(qty),
+            'unit_price_vep':  str(price),
+            'line_total_vep':  str(line),
+        })
+        vep_subtotal += line
+
+    if not items:
+        flash.error(request, 'Please add at least one line item.')
+        return redirect('enquiry_detail', pk=pk)
+
+    try:
+        vat_rate = Decimal(str(request.POST.get('vat_rate', '9'))).quantize(Decimal('0.01'))
+    except Exception:
+        vat_rate = Decimal('9.00')
+
+    platform_fee_rate = Decimal('3.00')
+    vat_amount          = (vep_subtotal * vat_rate / 100).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+    platform_fee_amount = (vep_subtotal * platform_fee_rate / 100).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+    total = vep_subtotal + vat_amount + platform_fee_amount
+
+    quote = SupplierQuote.objects.create(
+        enquiry=enquiry,
+        supplier=request.user,
+        items=items,
+        vep_subtotal=vep_subtotal,
+        vat_rate=vat_rate,
+        vat_amount=vat_amount,
+        platform_fee_rate=platform_fee_rate,
+        platform_fee_amount=platform_fee_amount,
+        total=total,
+        message=request.POST.get('message', '').strip(),
+        lead_time=request.POST.get('lead_time', '').strip(),
+        valid_until=request.POST.get('valid_until') or None,
+    )
+    enquiry.status = SupplierEnquiry.STATUS_QUOTED
+    enquiry.save(update_fields=['status'])
+    notify_client_new_supplier_quote(quote)
+    flash.success(request, 'Quote sent successfully.')
+    return redirect('enquiry_detail', pk=pk)
+
+
+# ── Respond to supplier quote ──────────────────────────────────────────────────
+
+@login_required
+@require_POST
+def respond_to_quote(request, enquiry_pk, quote_pk):
+    enquiry = get_object_or_404(SupplierEnquiry, pk=enquiry_pk, client=request.user)
+    quote   = get_object_or_404(SupplierQuote, pk=quote_pk, enquiry=enquiry)
+    form = SupplierQuoteResponseForm(request.POST)
+    if not form.is_valid():
+        flash.error(request, 'Invalid response.')
+        return redirect('enquiry_detail', pk=enquiry_pk)
+
+    cd = form.cleaned_data
+    quote.status = cd['status']
+    quote.modification_note = cd.get('modification_note', '')
+    quote.save(update_fields=['status', 'modification_note'])
+
+    if cd['status'] == SupplierQuote.STATUS_ACCEPTED:
+        enquiry.status = SupplierEnquiry.STATUS_ACCEPTED
+    elif cd['status'] in (SupplierQuote.STATUS_MODIFICATION_REQUESTED, SupplierQuote.STATUS_REJECTED):
+        enquiry.status = SupplierEnquiry.STATUS_OPEN
+    enquiry.save(update_fields=['status'])
+
+    notify_supplier_quote_response(quote)
+    flash.success(request, f'Quote {quote.get_status_display().lower()}.')
+    return redirect('enquiry_detail', pk=enquiry_pk)
+
+
+# ── Supplier enquiry messages ──────────────────────────────────────────────────
+
+@login_required
+def supplier_enquiry_messages(request, pk):
+    enquiry = get_object_or_404(SupplierEnquiry, pk=pk)
+    if request.user not in (enquiry.client, enquiry.supplier):
+        raise PermissionDenied
+    other = enquiry.supplier if request.user == enquiry.client else enquiry.client
+    if request.method == 'POST':
+        body = request.POST.get('body', '').strip()
+        if body:
+            SupplierMessage.objects.create(
+                enquiry=enquiry,
+                sender=request.user,
+                recipient=other,
+                body=body,
+            )
+            subject = f'New message from {request.user.full_name}'
+            notice_body = (
+                f'Bula {other.first_name},\n\n'
+                f'{request.user.full_name} sent you a message about "{enquiry.title}":\n\n'
+                f'{body}\n\n'
+                f'Log in to reply.\n\n'
+                f'Vinaka,\nThe Coconut Wireless Network Team'
+            )
+            if other.notify_email_new_message:
+                from .utils import _send_email_notice
+                _send_email_notice(other, subject, notice_body, PlatformNotice.TYPE_NEW_MESSAGE)
+            send_fcm_push(other, subject, f'{request.user.full_name}: {body[:80]}')
+        return redirect('supplier_enquiry_messages', pk=pk)
+
+    messages_qs = enquiry.messages.select_related('sender').order_by('created_at')
+
+    # Mark unread incoming messages as delivered + read
+    _now = timezone.now()
+    unread_sm = messages_qs.filter(recipient=request.user, read_at__isnull=True)
+    unread_sm.filter(delivered_at__isnull=True).update(delivered_at=_now)
+    unread_sm.update(read_at=_now)
+
+    return render(request, 'marketplace/supplier_enquiry_messages.html', {
+        'enquiry': enquiry,
+        'chat_messages': messages_qs,
+        'other': other,
+    })

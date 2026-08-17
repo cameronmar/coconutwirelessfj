@@ -1,0 +1,165 @@
+{% extends "marketplace/base.html" %}
+{% block title %}Supplier Dashboard – The Coconut Wireless Network{% endblock %}
+
+{% block extra_css %}
+<style>
+.app-body{display:grid;grid-template-columns:220px 1fr;min-height:calc(100vh - 62px);}
+.sidebar{background:var(--white);border-right:1px solid #dde8ef;padding:22px 0;}
+.sb-user{padding:14px 18px 18px;border-bottom:1px solid #dde8ef;margin-bottom:10px;}
+.sb-av{width:42px;height:42px;border-radius:50%;background:var(--blue);color:var(--white);display:flex;align-items:center;justify-content:center;font-weight:700;margin-bottom:9px;}
+.sb-name{font-weight:700;font-size:.92rem;}
+.sb-role{font-size:.75rem;color:var(--muted);}
+.sb-lbl{font-size:.7rem;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;padding:0 18px;margin-bottom:4px;margin-top:4px;}
+.sb-link{display:flex;align-items:center;gap:9px;padding:9px 18px;font-size:.87rem;color:var(--text);text-decoration:none;transition:background .15s;}
+.sb-link:hover{background:var(--blue-light);}
+.sb-link.active{background:var(--blue-light);color:var(--blue);font-weight:700;border-right:3px solid var(--blue);}
+.sb-link .icon{width:20px;text-align:center;}
+.main{padding:26px 28px 50px;}
+.page-title{font-size:1.4rem;font-weight:700;margin:0 0 4px;}
+.page-sub{color:var(--muted);font-size:.9rem;margin:0 0 22px;}
+.stats-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:13px;margin-bottom:26px;}
+.stat-card{background:var(--white);border-radius:13px;padding:16px;box-shadow:0 3px 14px rgba(0,80,120,.07);}
+.stat-num{font-size:1.7rem;font-weight:800;color:var(--blue);}
+.stat-lbl{font-size:.78rem;color:var(--muted);margin-top:2px;}
+.sec-hdr{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;margin-top:22px;}
+.sec-hdr h2{font-size:1.02rem;margin:0;}
+.job-row{background:var(--white);border-radius:13px;box-shadow:0 3px 12px rgba(0,80,120,.07);padding:14px 17px;margin-bottom:9px;display:flex;justify-content:space-between;align-items:center;gap:12px;}
+.job-title{font-weight:700;font-size:.9rem;margin-bottom:2px;}
+.job-meta{font-size:.78rem;color:var(--muted);display:flex;gap:10px;flex-wrap:wrap;}
+.job-right{display:flex;flex-direction:column;align-items:flex-end;gap:5px;flex-shrink:0;}
+footer{display:none;}
+@media(max-width:760px){.app-body{grid-template-columns:1fr;}.sidebar{border-right:none;border-bottom:1px solid #dde8ef;}}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="app-body">
+  <aside class="sidebar">
+    <div class="sb-user">
+      <div class="sb-av">{{ user.initials }}</div>
+      <div class="sb-name">{{ user.first_name }} {{ user.last_name }}</div>
+      <div class="sb-role">Supplier · {{ user.town }}</div>
+    </div>
+    <div class="sb-lbl">Enquiries</div>
+    <a href="{% url 'supplier_dashboard' %}" class="sb-link active"><span class="icon">🏠</span>Dashboard</a>
+    <a href="{% url 'supplier_profile' pk=user.pk %}" class="sb-link"><span class="icon">👤</span>My profile</a>
+    <a href="{% url 'browse_suppliers' %}" class="sb-link"><span class="icon">🔍</span>Browse suppliers</a>
+    <div class="sb-lbl" style="margin-top:10px;">Account</div>
+    <a href="{% url 'notices' %}" class="sb-link"><span class="icon">🔔</span>Notices</a>
+    <a href="{% url 'contact_support' %}" class="sb-link"><span class="icon">✉️</span>Contact Us</a>
+    <a href="{% url 'change_password' %}" class="sb-link"><span class="icon">🔑</span>Change password</a>
+    <a href="{% url 'logout' %}" class="sb-link"><span class="icon">🚪</span>Log out</a>
+  </aside>
+
+  <main class="main">
+    <div class="page-title">Good day, {{ user.first_name }} 👋</div>
+    <p class="page-sub">
+      You have {{ pending_enquiries|length }} new enquir{{ pending_enquiries|length|pluralize:"y,ies" }} awaiting a quote.
+      {% if profile.verification_status == 'pending' %} Your account is pending document verification.{% endif %}
+    </p>
+
+    {% if profile.verification_status == 'rejected' or profile.verification_status == 'suspended' %}
+    <div class="card" style="margin-bottom:18px;border:1px solid #f5a623;background:#fff3e0;">
+      <strong>Account restricted.</strong> {{ profile.enquiry_block_reason }}
+    </div>
+    {% elif profile.verification_status == 'pending' %}
+    <div class="card" style="margin-bottom:18px;border:1px solid #ffe2a8;background:#fffaf0;">
+      <strong>Verification in progress.</strong>
+      Your documents are still being reviewed by our admin team. You can receive and respond to enquiries in the meantime.
+    </div>
+    {% endif %}
+
+    <div class="stats-row">
+      <div class="stat-card"><div class="stat-num">{{ pending_enquiries|length }}</div><div class="stat-lbl">New enquiries</div></div>
+      <div class="stat-card"><div class="stat-num">{{ quoted_enquiries|length }}</div><div class="stat-lbl">Awaiting acceptance</div></div>
+      <div class="stat-card"><div class="stat-num">{{ accepted_enquiries|length }}</div><div class="stat-lbl">Accepted</div></div>
+      <div class="stat-card"><div class="stat-num">{{ closed_enquiries|length }}</div><div class="stat-lbl">Closed</div></div>
+    </div>
+
+    {% if pending_enquiries %}
+    <div class="sec-hdr"><h2>New Enquiries</h2></div>
+    {% for e in pending_enquiries %}
+    <div class="job-row">
+      <div>
+        <div class="job-title">{{ e.title }}</div>
+        <div class="job-meta">
+          <span>From: {{ e.client.full_name }}</span>
+          <span>📍 {{ e.get_town_display }}</span>
+          <span>{{ e.created_at|timesince }} ago</span>
+        </div>
+      </div>
+      <div class="job-right">
+        <span class="chip chip-open">New</span>
+        <a href="{% url 'enquiry_detail' pk=e.pk %}" class="btn btn-sm" style="background:#f0f5f8;color:var(--blue);">View</a>
+      </div>
+    </div>
+    {% endfor %}
+    {% endif %}
+
+    {% if quoted_enquiries %}
+    <div class="sec-hdr" style="margin-top:22px;"><h2>Awaiting Acceptance</h2></div>
+    {% for e in quoted_enquiries %}
+    <div class="job-row">
+      <div>
+        <div class="job-title">{{ e.title }}</div>
+        <div class="job-meta">
+          <span>From: {{ e.client.full_name }}</span>
+          <span>📍 {{ e.get_town_display }}</span>
+        </div>
+      </div>
+      <div class="job-right">
+        <span class="chip chip-pending">Quote sent</span>
+        <a href="{% url 'enquiry_detail' pk=e.pk %}" class="btn btn-sm" style="background:#f0f5f8;color:var(--blue);">View</a>
+      </div>
+    </div>
+    {% endfor %}
+    {% endif %}
+
+    {% if accepted_enquiries %}
+    <div class="sec-hdr" style="margin-top:22px;"><h2>Accepted</h2></div>
+    {% for e in accepted_enquiries %}
+    <div class="job-row">
+      <div>
+        <div class="job-title">{{ e.title }}</div>
+        <div class="job-meta">
+          <span>From: {{ e.client.full_name }}</span>
+          <span>📍 {{ e.get_town_display }}</span>
+        </div>
+      </div>
+      <div class="job-right">
+        <span class="chip chip-accepted">Accepted</span>
+        <a href="{% url 'enquiry_detail' pk=e.pk %}" class="btn btn-sm" style="background:#f0f5f8;color:var(--blue);">View</a>
+      </div>
+    </div>
+    {% endfor %}
+    {% endif %}
+
+    {% if closed_enquiries %}
+    <div class="sec-hdr" style="margin-top:22px;"><h2>Closed</h2></div>
+    {% for e in closed_enquiries %}
+    <div class="job-row">
+      <div>
+        <div class="job-title">{{ e.title }}</div>
+        <div class="job-meta">
+          <span>From: {{ e.client.full_name }}</span>
+          <span>📍 {{ e.get_town_display }}</span>
+        </div>
+      </div>
+      <div class="job-right">
+        <span class="chip chip-completed">Closed</span>
+        <a href="{% url 'enquiry_detail' pk=e.pk %}" class="btn btn-sm" style="background:#f0f5f8;color:var(--blue);">View</a>
+      </div>
+    </div>
+    {% endfor %}
+    {% endif %}
+
+    {% if not pending_enquiries and not quoted_enquiries and not accepted_enquiries %}
+    <div style="text-align:center;padding:50px 20px;color:var(--muted);">
+      <p style="font-size:2rem">📬</p>
+      <p>No enquiries yet. Make sure your profile is complete so clients can find you.</p>
+      <a href="{% url 'supplier_profile' pk=user.pk %}" class="btn btn-primary">View my profile</a>
+    </div>
+    {% endif %}
+  </main>
+</div>
+{% endblock %}

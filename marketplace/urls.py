@@ -44,6 +44,18 @@ urlpatterns = [
     # Notices
     path('notices/',                         views.notices,      name='notices'),
     path('notices/settings/',                views.notification_settings, name='notification_settings'),
+    # Android app bridge
+    path('api/register-device/',             views.register_fcm_token, name='register_fcm_token'),
+    # Suppliers
+    path('register/supplier/',                          views.register_supplier,          name='register_supplier'),
+    path('suppliers/',                                  views.browse_suppliers,           name='browse_suppliers'),
+    path('suppliers/<int:pk>/',                         views.supplier_profile,           name='supplier_profile'),
+    path('suppliers/<int:supplier_pk>/enquire/',        views.send_enquiry,               name='send_enquiry'),
+    path('enquiries/<int:pk>/',                         views.enquiry_detail,             name='enquiry_detail'),
+    path('enquiries/<int:pk>/quote/',                   views.submit_supplier_quote,      name='submit_supplier_quote'),
+    path('enquiries/<int:enquiry_pk>/quotes/<int:quote_pk>/respond/', views.respond_to_quote, name='respond_to_quote'),
+    path('enquiries/<int:pk>/messages/',                views.supplier_enquiry_messages,  name='supplier_enquiry_messages'),
+    path('dashboard/supplier/',                         views.supplier_dashboard,         name='supplier_dashboard'),
     # Messages
     path('messages/',                        views.inbox,        name='inbox'),
     path('messages/<int:tpk>/<int:opk>/',    views.conversation, name='conversation'),

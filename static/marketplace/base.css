@@ -67,6 +67,9 @@ nav a:hover{background:rgba(255,255,255,.15);}
 .chip-void{background:#f0f0f0;color:#666;}
 .chip-in_progress{background:var(--blue-light);color:var(--blue);}
 .chip-disputed{background:#fdf2ec;color:#c0392b;}
+.chip-quoted{background:var(--blue-light);color:var(--blue);}
+.chip-rejected{background:#fdf2ec;color:#c0392b;}
+.chip-modification_requested{background:#fff8e6;color:var(--orange);}
 /* Footer */
 footer{background:#1a2e3b;color:#8ba4b3;text-align:center;padding:22px;font-size:.85rem;}
 footer a{color:#8ba4b3;text-decoration:none;}
