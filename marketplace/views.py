@@ -395,7 +395,10 @@ def login_view(request):
             except ValueError:
                 cache.set(limit_key, 1, 900)
             flash.error(request, 'Incorrect email or password.')
-    return render(request, 'marketplace/login.html', {'form': form})
+    return render(request, 'marketplace/login.html', {
+        'form': form,
+        'facebook_login_enabled': settings.FACEBOOK_LOGIN_ENABLED,
+    })
 
 
 def logout_view(request):

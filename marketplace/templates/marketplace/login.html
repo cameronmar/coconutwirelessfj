@@ -52,6 +52,11 @@ main{flex:1;display:flex;align-items:center;justify-content:center;padding:40px 
         <button type="submit" class="btn btn-primary" style="width:100%;padding:13px;" id="loginBtn">Log in as Client</button>
       </form>
       <div class="divider">or</div>
+      {% if facebook_login_enabled %}
+      <a href="{% url 'facebook_connect' %}" class="social-btn" style="display:block;text-align:center;text-decoration:none;color:inherit;">📘 Continue with Facebook</a>
+      {% else %}
+      <button class="social-btn" disabled>📘 Continue with Facebook (coming soon)</button>
+      {% endif %}
       <button class="social-btn" disabled>🌐 Continue with Google (coming soon)</button>
     </div>
   </div>

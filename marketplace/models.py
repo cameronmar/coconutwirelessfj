@@ -430,6 +430,78 @@ class BusinessProfile(models.Model):
             raise ValidationError({'workspace': 'A business profile can only be attached to a business workspace.'})
 
 
+# ── Facebook Login ────────────────────────────────────────────────────────────
+# Facebook is an authentication channel only — Coconut Wireless remains the
+# source of truth for everything else. See marketplace/meta_client.py (Graph
+# API calls) and marketplace/meta_security.py (data-deletion signed_request
+# verification).
+
+class SocialIdentity(models.Model):
+    """Links a Coconut Wireless User to a Facebook identity. Never used to
+    silently merge accounts based on name/photo — see social_views.py's
+    account-linking-challenge handling for an email collision with no
+    existing SocialIdentity."""
+    PROVIDER_FACEBOOK = 'facebook'
+    PROVIDER_CHOICES = [
+        (PROVIDER_FACEBOOK, 'Facebook'),
+    ]
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='social_identities')
+
+    provider = models.CharField(max_length=30, choices=PROVIDER_CHOICES)
+    provider_user_id = models.CharField(max_length=255)
+
+    email_at_link_time = models.EmailField(blank=True)
+    display_name_at_link_time = models.CharField(max_length=255, blank=True)
+
+    linked_at = models.DateTimeField(auto_now_add=True)
+    last_login_at = models.DateTimeField(blank=True, null=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['provider', 'provider_user_id'], name='unique_social_provider_identity'),
+        ]
+        verbose_name = 'Social Identity'
+        verbose_name_plural = 'Social Identities'
+
+    def __str__(self):
+        return f'{self.get_provider_display()} identity for {self.user}'
+
+
+class SocialDataDeletionRequest(models.Model):
+    """Created only from a verified Meta data-deletion signed_request — see
+    meta_security.parse_and_verify_signed_request(). Required by Meta's
+    platform policy for any app using Facebook Login, independent of
+    whether Page linking or Messenger are ever added. user is SET_NULL
+    (not CASCADE) since the point of this record is to outlive the account
+    changes it documents."""
+    STATUS_PENDING   = 'pending'
+    STATUS_COMPLETED = 'completed'
+    STATUS_NOT_FOUND = 'not_found'
+    STATUS_CHOICES = [
+        (STATUS_PENDING,   'Pending'),
+        (STATUS_COMPLETED, 'Completed'),
+        (STATUS_NOT_FOUND, 'No matching identity found'),
+    ]
+
+    user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='social_data_deletion_requests')
+
+    provider_user_id_hash = models.CharField(max_length=128)
+    confirmation_code     = models.CharField(max_length=100, unique=True)
+
+    status       = models.CharField(max_length=30, choices=STATUS_CHOICES, default=STATUS_PENDING)
+    requested_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(blank=True, null=True)
+
+    class Meta:
+        ordering = ['-requested_at']
+        verbose_name = 'Social Data Deletion Request'
+        verbose_name_plural = 'Social Data Deletion Requests'
+
+    def __str__(self):
+        return f'Deletion request {self.confirmation_code} ({self.status})'
+
+
 # ── Task ──────────────────────────────────────────────────────────────────────
 
 class TradeCategory(models.Model):

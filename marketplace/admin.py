@@ -45,6 +45,8 @@ from .models import (
     Workspace,
     WorkspaceMembership,
     BusinessProfile,
+    SocialIdentity,
+    SocialDataDeletionRequest,
 )
 from . import workspaces
 from .utils import (
@@ -342,6 +344,33 @@ class BusinessProfileAdmin(admin.ModelAdmin):
         ('Verification', {'fields': ('verification_status', 'verified_at')}),
         ('Timestamps', {'fields': ('created_at', 'updated_at')}),
     )
+
+
+# ── Facebook Login ────────────────────────────────────────────────────────────
+
+@admin.register(SocialIdentity)
+class SocialIdentityAdmin(admin.ModelAdmin):
+    list_display  = ['user', 'provider', 'provider_user_id', 'linked_at', 'last_login_at']
+    list_select_related = ['user']
+    list_filter   = ['provider', 'linked_at']
+    search_fields = ['user__email', 'provider_user_id', 'email_at_link_time']
+    raw_id_fields = ['user']
+    readonly_fields = ['linked_at']
+
+
+@admin.register(SocialDataDeletionRequest)
+class SocialDataDeletionRequestAdmin(admin.ModelAdmin):
+    list_display  = ['confirmation_code', 'user', 'status', 'requested_at', 'completed_at']
+    list_select_related = ['user']
+    list_filter   = ['status', 'requested_at']
+    search_fields = ['confirmation_code', 'provider_user_id_hash', 'user__email']
+    readonly_fields = ['user', 'provider_user_id_hash', 'confirmation_code', 'status', 'requested_at', 'completed_at']
+
+    def has_add_permission(self, request):
+        return False  # only ever created by the data-deletion callback
+
+    def has_change_permission(self, request, obj=None):
+        return False
 
 
 # ── Task ──────────────────────────────────────────────────────────────────────

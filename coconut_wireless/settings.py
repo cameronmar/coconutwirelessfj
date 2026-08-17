@@ -63,14 +63,32 @@ BETA_ALLOWED_EMAILS = {email.lower() for email in _get_list_env('BETA_ALLOWED_EM
 BETA_ALLOWED_DOMAINS = {domain.lower().lstrip('@') for domain in _get_list_env('BETA_ALLOWED_DOMAINS', '')}
 
 # Facebook login / multi-workspace / Messenger — phased rollout flags. All off
-# by default; see docs/WORKSPACE_MIGRATION.md (once written) for what each
-# gates. Only MULTI_WORKSPACE_ENABLED has any effect yet — the rest are inert
-# until their respective integrations land.
+# by default. FACEBOOK_PAGE_LINKING_ENABLED / MESSENGER_CONNECTION_ENABLED /
+# MESSENGER_NOTIFICATIONS_ENABLED are still inert — those integrations
+# haven't been built (only Facebook Login itself has landed).
 FACEBOOK_LOGIN_ENABLED = _get_bool_env('FACEBOOK_LOGIN_ENABLED', False)
 FACEBOOK_PAGE_LINKING_ENABLED = _get_bool_env('FACEBOOK_PAGE_LINKING_ENABLED', False)
 MESSENGER_CONNECTION_ENABLED = _get_bool_env('MESSENGER_CONNECTION_ENABLED', False)
 MESSENGER_NOTIFICATIONS_ENABLED = _get_bool_env('MESSENGER_NOTIFICATIONS_ENABLED', False)
 MULTI_WORKSPACE_ENABLED = _get_bool_env('MULTI_WORKSPACE_ENABLED', False)
+
+# ── Meta (Facebook) app configuration ─────────────────────────────────────────
+# Application-level only. Required in production once FACEBOOK_LOGIN_ENABLED
+# is on (enforced below) — inert placeholders are fine while it's off.
+META_APP_ID = os.environ.get('META_APP_ID', '').strip()
+META_APP_SECRET = os.environ.get('META_APP_SECRET', '').strip()
+META_GRAPH_API_VERSION = os.environ.get('META_GRAPH_API_VERSION', 'v21.0').strip()
+META_OAUTH_REDIRECT_URI = os.environ.get('META_OAUTH_REDIRECT_URI', '').strip()
+
+if IS_PRODUCTION and FACEBOOK_LOGIN_ENABLED:
+    _missing_meta_vars = sorted({
+        var_name for var_name in ('META_APP_ID', 'META_APP_SECRET', 'META_OAUTH_REDIRECT_URI')
+        if not globals()[var_name]
+    })
+    if _missing_meta_vars:
+        raise ImproperlyConfigured(
+            f'FACEBOOK_LOGIN_ENABLED is on but missing required env var(s): {", ".join(_missing_meta_vars)}'
+        )
 
 # ── Application definition ─────────────────────────────────────────────────────
 INSTALLED_APPS = [

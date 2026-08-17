@@ -31,6 +31,8 @@ from .models import (
     Quote,
     QuotingAppointment,
     QuotingAppointmentSlot,
+    SocialDataDeletionRequest,
+    SocialIdentity,
     Task,
     TradieProfile,
     User,
@@ -38,7 +40,7 @@ from .models import (
     Workspace,
     WorkspaceMembership,
 )
-from . import workspaces
+from . import meta_client, workspaces
 from .utils import (
     calculate_market_price_per_unit,
     calculate_market_take_home,
@@ -2262,3 +2264,206 @@ class AuditWorkspaceRelationshipsCommandTests(TestCase):
         self.assertIn('mismatched=1', output)
         self.task.refresh_from_db()
         self.assertEqual(self.task.client_workspace_id, other_ws.id)
+
+
+@override_settings(
+    FACEBOOK_LOGIN_ENABLED=True,
+    META_APP_ID='test-app-id',
+    META_APP_SECRET='test-app-secret',
+    META_OAUTH_REDIRECT_URI='https://testserver/integrations/facebook/callback/',
+)
+class FacebookLoginTests(TestCase):
+    """meta_client is mocked throughout — no real Graph API calls. See
+    marketplace/meta_client.py's own docstring for why: every real HTTP call
+    goes through a named function there specifically so tests can mock it
+    directly instead of needing an HTTP-mocking library."""
+
+    def setUp(self):
+        from django.core.cache import cache
+        cache.clear()
+
+    def test_disabled_flag_404s(self):
+        with override_settings(FACEBOOK_LOGIN_ENABLED=False):
+            response = self.client.get(reverse('facebook_connect'), secure=True)
+        self.assertEqual(response.status_code, 404)
+
+    def test_connect_redirects_to_facebook_and_stores_state(self):
+        response = self.client.get(reverse('facebook_connect'), secure=True)
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(response.url.startswith('https://www.facebook.com/'))
+        self.assertIn('facebook_oauth_state', self.client.session)
+
+    def test_callback_missing_state_is_rejected(self):
+        response = self.client.get(reverse('facebook_callback'), {'code': 'abc'}, secure=True)
+        self.assertRedirects(response, reverse('login'))
+        self.assertFalse(User.objects.filter(email__startswith='facebook-').exists())
+
+    def test_callback_state_mismatch_is_rejected(self):
+        session = self.client.session
+        session['facebook_oauth_state'] = 'expected-state'
+        session.save()
+        response = self.client.get(
+            reverse('facebook_callback'), {'code': 'abc', 'state': 'wrong-state'}, secure=True,
+        )
+        self.assertRedirects(response, reverse('login'))
+
+    def _do_callback(self, code='auth-code', state='matching-state'):
+        session = self.client.session
+        session['facebook_oauth_state'] = state
+        session.save()
+        return self.client.get(
+            reverse('facebook_callback'), {'code': code, 'state': state}, secure=True,
+        )
+
+    @mock.patch('marketplace.meta_client.get_user_profile')
+    @mock.patch('marketplace.meta_client.exchange_code_for_token')
+    def test_callback_creates_new_user_and_client_workspace(self, mock_exchange, mock_profile):
+        mock_exchange.return_value = {'access_token': 'user-token'}
+        mock_profile.return_value = {'id': 'fb-12345', 'name': 'Josaia Vuli', 'email': 'josaia@example.com'}
+
+        response = self._do_callback()
+        self.assertRedirects(response, reverse('dashboard'), fetch_redirect_response=False)
+
+        user = User.objects.get(email='josaia@example.com')
+        self.assertEqual(user.first_name, 'Josaia')
+        self.assertEqual(user.last_name, 'Vuli')
+        self.assertEqual(user.role, User.ROLE_CLIENT)
+        self.assertFalse(user.has_usable_password())
+
+        identity = SocialIdentity.objects.get(provider_user_id='fb-12345')
+        self.assertEqual(identity.user, user)
+        self.assertEqual(identity.provider, SocialIdentity.PROVIDER_FACEBOOK)
+
+        self.assertIsNotNone(workspaces.get_client_workspace(user))
+        self.assertIn('_auth_user_id', self.client.session)
+
+    @mock.patch('marketplace.meta_client.get_user_profile')
+    @mock.patch('marketplace.meta_client.exchange_code_for_token')
+    def test_callback_logs_in_existing_identity(self, mock_exchange, mock_profile):
+        user = User.objects.create_user(
+            email='existing@example.com', password=None,
+            first_name='Existing', last_name='User', role=User.ROLE_CLIENT, town='Suva',
+        )
+        SocialIdentity.objects.create(
+            user=user, provider=SocialIdentity.PROVIDER_FACEBOOK, provider_user_id='fb-99999',
+        )
+        mock_exchange.return_value = {'access_token': 'user-token'}
+        mock_profile.return_value = {'id': 'fb-99999', 'name': 'Existing User', 'email': 'existing@example.com'}
+
+        response = self._do_callback()
+        self.assertRedirects(response, reverse('dashboard'), fetch_redirect_response=False)
+        self.assertEqual(int(self.client.session['_auth_user_id']), user.pk)
+        # No duplicate identity or account created.
+        self.assertEqual(SocialIdentity.objects.filter(provider_user_id='fb-99999').count(), 1)
+        self.assertEqual(User.objects.filter(email='existing@example.com').count(), 1)
+
+    @mock.patch('marketplace.meta_client.get_user_profile')
+    @mock.patch('marketplace.meta_client.exchange_code_for_token')
+    def test_callback_email_collision_is_a_challenge_not_a_silent_merge(self, mock_exchange, mock_profile):
+        """An email match alone must never silently attach a Facebook
+        identity to an existing account — the account holder has to
+        authenticate with their password first."""
+        existing = User.objects.create_user(
+            email='shared@example.com', password='RealPassword123',
+            first_name='Real', last_name='Owner', role=User.ROLE_CLIENT, town='Suva',
+        )
+        mock_exchange.return_value = {'access_token': 'user-token'}
+        mock_profile.return_value = {'id': 'fb-55555', 'name': 'Impersonator', 'email': 'shared@example.com'}
+
+        response = self._do_callback()
+        self.assertRedirects(response, reverse('login'))
+        self.assertFalse(SocialIdentity.objects.filter(provider_user_id='fb-55555').exists())
+        self.assertNotIn('_auth_user_id', self.client.session)
+        existing.refresh_from_db()  # untouched
+
+    @mock.patch('marketplace.meta_client.get_user_profile')
+    @mock.patch('marketplace.meta_client.exchange_code_for_token')
+    def test_callback_links_facebook_to_the_currently_logged_in_user(self, mock_exchange, mock_profile):
+        user = User.objects.create_user(
+            email='linkme@example.com', password='RealPassword123',
+            first_name='Link', last_name='Me', role=User.ROLE_CLIENT, town='Suva',
+        )
+        self.client.login(username='linkme@example.com', password='RealPassword123')
+        mock_exchange.return_value = {'access_token': 'user-token'}
+        mock_profile.return_value = {'id': 'fb-77777', 'name': 'Link Me', 'email': ''}
+
+        response = self._do_callback()
+        self.assertRedirects(response, reverse('dashboard'), fetch_redirect_response=False)
+        identity = SocialIdentity.objects.get(provider_user_id='fb-77777')
+        self.assertEqual(identity.user, user)
+
+    @mock.patch('marketplace.meta_client.exchange_code_for_token')
+    def test_callback_graph_api_error_shows_friendly_message_not_crash(self, mock_exchange):
+        mock_exchange.side_effect = meta_client.GraphAPIError('boom')
+        response = self._do_callback()
+        self.assertRedirects(response, reverse('login'))
+
+    def test_callback_is_rate_limited(self):
+        from django.core.cache import cache
+        cache.set('ratelimit:facebook_callback:127.0.0.1', 20, 300)
+        response = self._do_callback()
+        self.assertRedirects(response, reverse('login'))
+
+
+@override_settings(META_APP_SECRET='test-app-secret')
+class MetaDataDeletionTests(TestCase):
+    def _signed_request(self, payload, secret='test-app-secret'):
+        import base64
+        import hashlib
+        import hmac
+        import json as _json
+
+        def b64(data):
+            return base64.urlsafe_b64encode(data).rstrip(b'=')
+
+        encoded_payload = b64(_json.dumps(payload).encode())
+        sig = hmac.new(secret.encode(), encoded_payload, hashlib.sha256).digest()
+        return (b64(sig) + b'.' + encoded_payload).decode()
+
+    def test_valid_request_with_existing_identity_deletes_it(self):
+        user = User.objects.create_user(
+            email='deleteme@example.com', password=None,
+            first_name='Delete', last_name='Me', role=User.ROLE_CLIENT, town='Suva',
+        )
+        SocialIdentity.objects.create(
+            user=user, provider=SocialIdentity.PROVIDER_FACEBOOK, provider_user_id='fb-delete-1',
+        )
+        signed = self._signed_request({'user_id': 'fb-delete-1', 'algorithm': 'HMAC-SHA256'})
+
+        response = self.client.post(reverse('meta_data_deletion'), {'signed_request': signed}, secure=True)
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertIn('confirmation_code', body)
+        self.assertFalse(SocialIdentity.objects.filter(provider_user_id='fb-delete-1').exists())
+
+        deletion_request = SocialDataDeletionRequest.objects.get(confirmation_code=body['confirmation_code'])
+        self.assertEqual(deletion_request.status, SocialDataDeletionRequest.STATUS_COMPLETED)
+        self.assertEqual(deletion_request.user, user)
+
+    def test_no_matching_identity_still_returns_a_confirmation(self):
+        signed = self._signed_request({'user_id': 'fb-unknown', 'algorithm': 'HMAC-SHA256'})
+        response = self.client.post(reverse('meta_data_deletion'), {'signed_request': signed}, secure=True)
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        deletion_request = SocialDataDeletionRequest.objects.get(confirmation_code=body['confirmation_code'])
+        self.assertEqual(deletion_request.status, SocialDataDeletionRequest.STATUS_NOT_FOUND)
+        self.assertIsNone(deletion_request.user)
+
+    def test_bad_signature_is_rejected(self):
+        signed = self._signed_request({'user_id': 'fb-x', 'algorithm': 'HMAC-SHA256'}, secret='wrong-secret')
+        response = self.client.post(reverse('meta_data_deletion'), {'signed_request': signed}, secure=True)
+        self.assertEqual(response.status_code, 403)
+        self.assertFalse(SocialDataDeletionRequest.objects.exists())
+
+    def test_status_endpoint_reports_back_the_recorded_status(self):
+        signed = self._signed_request({'user_id': 'fb-status', 'algorithm': 'HMAC-SHA256'})
+        create_response = self.client.post(reverse('meta_data_deletion'), {'signed_request': signed}, secure=True)
+        code = create_response.json()['confirmation_code']
+
+        status_response = self.client.get(reverse('meta_data_deletion_status', args=[code]), secure=True)
+        self.assertEqual(status_response.status_code, 200)
+        self.assertEqual(status_response.json()['status'], SocialDataDeletionRequest.STATUS_NOT_FOUND)
+
+    def test_unknown_confirmation_code_404s(self):
+        response = self.client.get(reverse('meta_data_deletion_status', args=['does-not-exist']), secure=True)
+        self.assertEqual(response.status_code, 404)

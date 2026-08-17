@@ -1,5 +1,6 @@
 from django.urls import path
 from . import views
+from . import social_views
 
 urlpatterns = [
     # Static
@@ -13,6 +14,11 @@ urlpatterns = [
     path('register/tradie/',       views.register_tradie,  name='register_tradie'),
     path('login/',                 views.login_view,    name='login'),
     path('logout/',                views.logout_view,   name='logout'),
+    # Facebook Login
+    path('integrations/facebook/connect/',   social_views.facebook_connect,  name='facebook_connect'),
+    path('integrations/facebook/callback/',  social_views.facebook_callback, name='facebook_callback'),
+    path('integrations/meta/data-deletion/', social_views.meta_data_deletion, name='meta_data_deletion'),
+    path('integrations/meta/data-deletion/status/<str:confirmation_code>/', social_views.meta_data_deletion_status, name='meta_data_deletion_status'),
     path('password-reset/',        views.password_reset_request, name='password_reset_request'),
     path('password-reset/<str:uidb64>/<str:token>/', views.password_reset_confirm, name='password_reset_confirm'),
     path('account/change-password/', views.change_password, name='change_password'),
