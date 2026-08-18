@@ -19,6 +19,7 @@ from django.db import DatabaseError, connection, transaction
 from django.db.models import Avg, Count, F, Q
 from django.http import Http404, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.template.loader import render_to_string
 from django.urls import reverse
 from django.utils import timezone
 
@@ -1385,6 +1386,59 @@ def delete_message(request, pk):
     return redirect('conversation', tpk=message.task_id, opk=message.recipient_id)
 
 
+@login_required
+def conversation_poll(request, tpk, opk):
+    """
+    Lightweight polling endpoint so an open thread picks up new messages
+    (and read/delivered status changes on your own messages) without the
+    full-page-reload this app otherwise relies on. Not websockets — the
+    client just calls this every few seconds while the tab is open and
+    visible. Same authorization as conversation() itself.
+    """
+    task = get_object_or_404(Task, pk=tpk)
+    other_user = get_object_or_404(User, pk=opk)
+    u = request.user
+    party_ids = _task_conversation_parties(task)
+    if u.pk not in party_ids or other_user.pk not in party_ids:
+        raise PermissionDenied
+
+    try:
+        after_id = int(request.GET.get('after', 0))
+    except (TypeError, ValueError):
+        after_id = 0
+
+    thread = Message.objects.filter(task=task).filter(
+        Q(sender=u, recipient=other_user) | Q(sender=other_user, recipient=u)
+    )
+
+    new_ids = list(thread.filter(pk__gt=after_id).order_by('created_at').values_list('pk', flat=True))
+    if new_ids:
+        now = timezone.now()
+        thread.filter(pk__in=new_ids, recipient=u, delivered_at__isnull=True).update(delivered_at=now)
+        thread.filter(pk__in=new_ids, recipient=u, read_at__isnull=True).update(read_at=now)
+    new_messages = Message.objects.filter(pk__in=new_ids).select_related('sender').order_by('created_at')
+
+    # My own recent messages, re-rendered every poll so a Sent → Delivered →
+    # Read transition shows up live too. There's no cheap way to know
+    # exactly which ones the client's cached copy is now stale on (the
+    # client only tracks the newest id it has, not a per-message status) —
+    # so this just re-sends a bounded recent window every time rather than
+    # trying to track deltas server-side. Cheap at this scale, and the
+    # client only replaces DOM nodes whose content actually changed.
+    own_recent = thread.filter(sender=u).exclude(pk__in=new_ids).select_related('sender').order_by('-created_at')[:20]
+
+    def render_bubble(m):
+        return render_to_string('marketplace/_message_bubble.html', {
+            'msg': m, 'user': u, 'edit_url_name': 'edit_message', 'delete_url_name': 'delete_message',
+        }, request=request)
+
+    return JsonResponse({
+        'new_html': ''.join(render_bubble(m) for m in new_messages),
+        'updates': {m.pk: render_bubble(m) for m in own_recent},
+        'latest_id': new_ids[-1] if new_ids else after_id,
+    })
+
+
 # ── Market (local professionals selling items/serves) ──────────────────────────
 
 def market_browse(request):
@@ -2048,3 +2102,40 @@ def delete_supplier_message(request, pk):
         message.deleted_at = timezone.now()
         message.save(update_fields=['deleted_at'])
     return redirect('supplier_enquiry_messages', pk=message.enquiry_id)
+
+
+@beta_feature('SUPPLIERS_ENABLED')
+@login_required
+def supplier_enquiry_messages_poll(request, pk):
+    """See conversation_poll — same polling contract, for the supplier
+    enquiry thread instead of a task conversation."""
+    enquiry = get_object_or_404(SupplierEnquiry, pk=pk)
+    u = request.user
+    if u not in (enquiry.client, enquiry.supplier):
+        raise PermissionDenied
+
+    try:
+        after_id = int(request.GET.get('after', 0))
+    except (TypeError, ValueError):
+        after_id = 0
+
+    thread = enquiry.messages.all()
+    new_ids = list(thread.filter(pk__gt=after_id).order_by('created_at').values_list('pk', flat=True))
+    if new_ids:
+        now = timezone.now()
+        thread.filter(pk__in=new_ids, recipient=u, delivered_at__isnull=True).update(delivered_at=now)
+        thread.filter(pk__in=new_ids, recipient=u, read_at__isnull=True).update(read_at=now)
+    new_messages = SupplierMessage.objects.filter(pk__in=new_ids).select_related('sender').order_by('created_at')
+
+    own_recent = thread.filter(sender=u).exclude(pk__in=new_ids).select_related('sender').order_by('-created_at')[:20]
+
+    def render_bubble(m):
+        return render_to_string('marketplace/_message_bubble.html', {
+            'msg': m, 'user': u, 'edit_url_name': 'edit_supplier_message', 'delete_url_name': 'delete_supplier_message',
+        }, request=request)
+
+    return JsonResponse({
+        'new_html': ''.join(render_bubble(m) for m in new_messages),
+        'updates': {m.pk: render_bubble(m) for m in own_recent},
+        'latest_id': new_ids[-1] if new_ids else after_id,
+    })

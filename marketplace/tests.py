@@ -2212,3 +2212,144 @@ class SupplierMessageEditDeleteTests(TestCase):
                 reverse('edit_supplier_message', args=[self.message.pk]), {'body': 'x'}, secure=True,
             )
         self.assertEqual(response.status_code, 404)
+
+
+@override_settings(
+    STORAGES={
+        'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
+        'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
+    },
+)
+class ConversationPollTests(TestCase):
+    """The no-websockets live-update mechanism: an open thread polls this
+    endpoint for anything newer than the last message it already has, and
+    for status changes (delivered/read) on its own not-yet-read messages."""
+
+    def setUp(self):
+        self.sender = User.objects.create_user(
+            email='pollsender@example.com', password='Password123',
+            first_name='Poll', last_name='Sender', role=User.ROLE_CLIENT, town='Suva',
+        )
+        self.recipient = User.objects.create_user(
+            email='pollrecipient@example.com', password='Password123',
+            first_name='Poll', last_name='Recipient', role=User.ROLE_TRADIE, town='Suva',
+        )
+        self.stranger = User.objects.create_user(
+            email='pollstranger@example.com', password='Password123',
+            first_name='Poll', last_name='Stranger', role=User.ROLE_CLIENT, town='Nadi',
+        )
+        self.task = Task.objects.create(
+            client=self.sender, title='Fix sink', category='plumbing',
+            description='Kitchen sink leaking', budget=Decimal('150.00'), town='Suva',
+        )
+        Quote.objects.create(task=self.task, tradie=self.recipient, price=Decimal('120.00'), message='Can do it', quote_includes='labour_only')
+
+    def test_poll_returns_messages_newer_than_after(self):
+        old = Message.objects.create(task=self.task, sender=self.sender, recipient=self.recipient, body='old message')
+        self.client.login(username=self.recipient.email, password='Password123')
+        response = self.client.get(
+            reverse('conversation_poll', args=[self.task.pk, self.sender.pk]), {'after': old.pk}, secure=True,
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data['new_html'], '')
+        self.assertEqual(data['latest_id'], old.pk)
+
+        new = Message.objects.create(task=self.task, sender=self.sender, recipient=self.recipient, body='brand new message')
+        response = self.client.get(
+            reverse('conversation_poll', args=[self.task.pk, self.sender.pk]), {'after': old.pk}, secure=True,
+        )
+        data = response.json()
+        self.assertIn('brand new message', data['new_html'])
+        self.assertEqual(data['latest_id'], new.pk)
+
+    def test_polling_marks_new_incoming_messages_delivered_and_read(self):
+        msg = Message.objects.create(task=self.task, sender=self.sender, recipient=self.recipient, body='hi')
+        self.client.login(username=self.recipient.email, password='Password123')
+        self.client.get(reverse('conversation_poll', args=[self.task.pk, self.sender.pk]), {'after': 0}, secure=True)
+        msg.refresh_from_db()
+        self.assertIsNotNone(msg.delivered_at)
+        self.assertIsNotNone(msg.read_at)
+
+    def test_poll_reports_read_status_update_for_own_message(self):
+        msg = Message.objects.create(task=self.task, sender=self.sender, recipient=self.recipient, body='did you see this?')
+        # Simulate the recipient having read it (e.g. via their own poll or page load).
+        Message.objects.filter(pk=msg.pk).update(delivered_at=django_timezone.now(), read_at=django_timezone.now())
+
+        self.client.login(username=self.sender.email, password='Password123')
+        response = self.client.get(
+            reverse('conversation_poll', args=[self.task.pk, self.recipient.pk]), {'after': msg.pk}, secure=True,
+        )
+        data = response.json()
+        self.assertIn(str(msg.pk), data['updates'])
+        self.assertIn('Read', data['updates'][str(msg.pk)])
+
+    def test_stranger_cannot_poll_a_conversation_they_are_not_party_to(self):
+        self.client.login(username=self.stranger.email, password='Password123')
+        response = self.client.get(
+            reverse('conversation_poll', args=[self.task.pk, self.sender.pk]), {'after': 0}, secure=True,
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_deleted_message_polled_in_shows_placeholder(self):
+        msg = Message.objects.create(task=self.task, sender=self.sender, recipient=self.recipient, body='secret regret')
+        msg.deleted_at = django_timezone.now()
+        msg.save(update_fields=['deleted_at'])
+        self.client.login(username=self.recipient.email, password='Password123')
+        response = self.client.get(
+            reverse('conversation_poll', args=[self.task.pk, self.sender.pk]), {'after': 0}, secure=True,
+        )
+        data = response.json()
+        self.assertIn('This message was deleted', data['new_html'])
+        self.assertNotIn('secret regret', data['new_html'])
+
+
+@override_settings(SUPPLIERS_ENABLED=True)
+@override_settings(
+    STORAGES={
+        'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
+        'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
+    },
+)
+class SupplierMessagePollTests(TestCase):
+    def setUp(self):
+        self.client_user = User.objects.create_user(
+            email='pollenqclient@example.com', password='Password123',
+            first_name='Poll', last_name='Client', role=User.ROLE_CLIENT, town='Suva',
+        )
+        self.supplier_user = User.objects.create_user(
+            email='pollenqsupplier@example.com', password='Password123',
+            first_name='Poll', last_name='Supplier', role=User.ROLE_SUPPLIER, town='Suva',
+        )
+        self.stranger = User.objects.create_user(
+            email='pollenqstranger@example.com', password='Password123',
+            first_name='Poll', last_name='Stranger', role=User.ROLE_CLIENT, town='Nadi',
+        )
+        self.enquiry = SupplierEnquiry.objects.create(
+            client=self.client_user, supplier=self.supplier_user,
+            title='Need cement', description='50 bags', town='Suva',
+        )
+
+    def test_poll_returns_new_message(self):
+        self.client.login(username=self.supplier_user.email, password='Password123')
+        response = self.client.get(reverse('supplier_enquiry_messages_poll', args=[self.enquiry.pk]), {'after': 0}, secure=True)
+        self.assertEqual(response.json()['new_html'], '')
+
+        msg = SupplierMessage.objects.create(
+            enquiry=self.enquiry, sender=self.client_user, recipient=self.supplier_user, body='when can you deliver?',
+        )
+        response = self.client.get(reverse('supplier_enquiry_messages_poll', args=[self.enquiry.pk]), {'after': 0}, secure=True)
+        data = response.json()
+        self.assertIn('when can you deliver?', data['new_html'])
+        self.assertEqual(data['latest_id'], msg.pk)
+
+    def test_stranger_cannot_poll(self):
+        self.client.login(username=self.stranger.email, password='Password123')
+        response = self.client.get(reverse('supplier_enquiry_messages_poll', args=[self.enquiry.pk]), {'after': 0}, secure=True)
+        self.assertEqual(response.status_code, 403)
+
+    def test_poll_stays_gated_behind_suppliers_enabled(self):
+        with override_settings(SUPPLIERS_ENABLED=False):
+            self.client.login(username=self.client_user.email, password='Password123')
+            response = self.client.get(reverse('supplier_enquiry_messages_poll', args=[self.enquiry.pk]), {'after': 0}, secure=True)
+        self.assertEqual(response.status_code, 404)

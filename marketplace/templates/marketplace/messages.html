@@ -105,51 +105,12 @@ footer{display:none;}
         <a href="{% url 'task_detail' active_task.pk %}" class="task-link">{{ active_task.title|truncatechars:28 }}</a>
       </div>
 
-      <div class="chat-body" id="chatBody">
+      <div class="chat-body" id="chatBody" data-poll-url="{% url 'conversation_poll' active_task.pk active_other.pk %}" data-latest-id="{{ chat_messages.last.pk|default:0 }}">
         {% for msg in chat_messages %}
           {% if forloop.first %}
             <div class="date-div">{{ msg.created_at|date:"N j, Y" }}</div>
           {% endif %}
-          <div class="msg {% if msg.sender == user %}out{% else %}in{% endif %}">
-            <div class="msg-av">{{ msg.sender.initials }}</div>
-            <div>
-              {% if msg.deleted_at %}
-                <div class="bubble deleted">This message was deleted</div>
-              {% else %}
-                <div class="bubble" id="bubble-{{ msg.pk }}">{{ msg.body }}</div>
-                {% if msg.edited_at %}<div class="msg-edited">(edited)</div>{% endif %}
-                {% if msg.sender == user %}
-                <form method="post" action="{% url 'edit_message' msg.pk %}" class="edit-form" id="edit-form-{{ msg.pk }}" style="display:none;" onsubmit="return guardSubmit(this);">
-                  {% csrf_token %}
-                  <textarea name="body">{{ msg.body }}</textarea>
-                  <div class="edit-actions">
-                    <button type="submit" class="save-btn">Save</button>
-                    <button type="button" class="cancel-btn" onclick="cancelEdit({{ msg.pk }})">Cancel</button>
-                  </div>
-                </form>
-                {% endif %}
-              {% endif %}
-              <div class="msg-time">{{ msg.created_at|time:"H:i" }}</div>
-              {% if msg.sender == user %}
-                {% if msg.read_at %}
-                  <div class="msg-status read">Read {{ msg.read_at|time:"H:i" }}</div>
-                {% elif msg.delivered_at %}
-                  <div class="msg-status">Delivered {{ msg.delivered_at|time:"H:i" }}</div>
-                {% else %}
-                  <div class="msg-status">Sent</div>
-                {% endif %}
-                {% if not msg.deleted_at %}
-                <div class="msg-actions">
-                  <button type="button" class="msg-action-btn" onclick="startEdit({{ msg.pk }})">Edit</button>
-                  <form method="post" action="{% url 'delete_message' msg.pk %}" style="display:contents;" onsubmit="return confirm('Delete this message? This can\'t be undone.') &amp;&amp; guardSubmit(this);">
-                    {% csrf_token %}
-                    <button type="submit" class="msg-action-btn">Delete</button>
-                  </form>
-                </div>
-                {% endif %}
-              {% endif %}
-            </div>
-          </div>
+          {% include "marketplace/_message_bubble.html" with msg=msg edit_url_name="edit_message" delete_url_name="delete_message" %}
         {% empty %}
           <div class="empty-state"><div class="icon">💬</div><p>No messages yet. Say bula!</p></div>
         {% endfor %}
@@ -212,5 +173,51 @@ function cancelEdit(pk){
   document.getElementById('bubble-' + pk).style.display = '';
   document.getElementById('edit-form-' + pk).style.display = 'none';
 }
+
+// Live updates without a full page reload: this app has no websockets, so
+// an open thread otherwise only sees new messages (or your own read
+// receipts ticking over) on the next full navigation. Polls every 4s while
+// the tab is open and visible, pauses in the background, and catches up
+// immediately when you switch back to it.
+(function(){
+  if (!cb || !cb.dataset.pollUrl) return;
+  var pollUrl = cb.dataset.pollUrl;
+  var latestId = parseInt(cb.dataset.latestId || '0', 10);
+  var inFlight = false;
+
+  function nearBottom(){
+    return cb.scrollHeight - cb.scrollTop - cb.clientHeight < 80;
+  }
+
+  function poll(){
+    if (inFlight || document.hidden) return;
+    inFlight = true;
+    fetch(pollUrl + '?after=' + latestId, { headers: { 'X-Requested-With': 'XMLHttpRequest' } })
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(data){
+        if (!data) return;
+        var stickToBottom = nearBottom();
+        if (data.new_html) {
+          var emptyState = cb.querySelector('.empty-state');
+          if (emptyState) emptyState.remove();
+          cb.insertAdjacentHTML('beforeend', data.new_html);
+        }
+        Object.keys(data.updates || {}).forEach(function(id){
+          var openEdit = document.getElementById('edit-form-' + id);
+          // Don't clobber an in-progress edit with a status-only refresh.
+          if (openEdit && openEdit.style.display !== 'none') return;
+          var existing = document.getElementById('msg-' + id);
+          if (existing) existing.outerHTML = data.updates[id];
+        });
+        if (data.latest_id) latestId = data.latest_id;
+        if (data.new_html && stickToBottom) cb.scrollTop = cb.scrollHeight;
+      })
+      .catch(function(){})
+      .finally(function(){ inFlight = false; });
+  }
+
+  setInterval(poll, 4000);
+  document.addEventListener('visibilitychange', function(){ if (!document.hidden) poll(); });
+})();
 </script>
 {% endblock %}

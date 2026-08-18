@@ -1,0 +1,47 @@
+{% comment %}
+Shared bubble markup for both Message (task conversations) and
+SupplierMessage (enquiry threads) — identical fields on both models, only
+the edit/delete URL names differ, passed in as edit_url_name/delete_url_name.
+Also used by the poll endpoints to render new/updated messages server-side,
+so the live-update JS never has to duplicate this markup.
+{% endcomment %}
+<div class="msg {% if msg.sender == user %}out{% else %}in{% endif %}" id="msg-{{ msg.pk }}">
+  <div class="msg-av">{{ msg.sender.initials }}</div>
+  <div>
+    {% if msg.deleted_at %}
+      <div class="bubble deleted">This message was deleted</div>
+    {% else %}
+      <div class="bubble" id="bubble-{{ msg.pk }}">{{ msg.body }}</div>
+      {% if msg.edited_at %}<div class="msg-edited">(edited)</div>{% endif %}
+      {% if msg.sender == user %}
+      <form method="post" action="{% url edit_url_name msg.pk %}" class="edit-form" id="edit-form-{{ msg.pk }}" style="display:none;" onsubmit="return guardSubmit(this);">
+        {% csrf_token %}
+        <textarea name="body">{{ msg.body }}</textarea>
+        <div class="edit-actions">
+          <button type="submit" class="save-btn">Save</button>
+          <button type="button" class="cancel-btn" onclick="cancelEdit({{ msg.pk }})">Cancel</button>
+        </div>
+      </form>
+      {% endif %}
+    {% endif %}
+    <div class="msg-time">{{ msg.created_at|time:"H:i" }}</div>
+    {% if msg.sender == user %}
+      {% if msg.read_at %}
+        <div class="msg-status read">Read {{ msg.read_at|time:"H:i" }}</div>
+      {% elif msg.delivered_at %}
+        <div class="msg-status">Delivered {{ msg.delivered_at|time:"H:i" }}</div>
+      {% else %}
+        <div class="msg-status">Sent</div>
+      {% endif %}
+      {% if not msg.deleted_at %}
+      <div class="msg-actions">
+        <button type="button" class="msg-action-btn" onclick="startEdit({{ msg.pk }})">Edit</button>
+        <form method="post" action="{% url delete_url_name msg.pk %}" style="display:contents;" onsubmit="return confirm('Delete this message? This can\'t be undone.') &amp;&amp; guardSubmit(this);">
+          {% csrf_token %}
+          <button type="submit" class="msg-action-btn">Delete</button>
+        </form>
+      </div>
+      {% endif %}
+    {% endif %}
+  </div>
+</div>
