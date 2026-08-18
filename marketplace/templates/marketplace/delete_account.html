@@ -1,0 +1,55 @@
+{% extends "marketplace/base.html" %}
+{% block title %}Delete Account – The Coconut Wireless Network{% endblock %}
+
+{% block extra_css %}
+<style>
+.settings-page{max-width:600px;margin:0 auto;padding:28px 20px 50px;}
+.page-title{font-size:1.4rem;font-weight:700;margin:0 0 4px;}
+.page-sub{color:var(--muted);font-size:.9rem;margin:0 0 22px;}
+.warn-box{background:#fff2f2;border:1px solid #e5484d;border-radius:10px;padding:14px 16px;font-size:.87rem;color:#8a1a1a;margin-bottom:22px;line-height:1.6;}
+.warn-box ul{margin:8px 0 0;padding-left:20px;}
+.check-row{display:flex;align-items:flex-start;gap:10px;margin:16px 0;}
+.check-row input{margin-top:3px;accent-color:#e5484d;width:18px;height:18px;flex-shrink:0;}
+.check-row label{font-size:.88rem;cursor:pointer;}
+.btn-danger{background:#e5484d;color:#fff;border:none;}
+.btn-danger:hover{background:#c93b40;}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="settings-page">
+  <div class="page-title">Delete your account</div>
+  <p class="page-sub">This permanently deactivates your Coconut Wireless Network account.</p>
+
+  <div class="warn-box">
+    <strong>What happens when you delete your account:</strong>
+    <ul>
+      <li>You'll be logged out immediately and won't be able to log back in.</li>
+      <li>Your name, email, mobile number, and town are removed from your account.</li>
+      <li>Any verification documents you uploaded (TIN letter, licences, insurance) are deleted.</li>
+      <li>Financial records (invoices, platform fees) and past tasks/quotes/reviews are kept, as required by law and our Terms — they'll show as belonging to a deleted user rather than your name.</li>
+    </ul>
+    See our <a href="{% url 'privacy' %}">Privacy Policy</a> for more detail on what's retained and why.
+  </div>
+
+  <div class="card">
+    <form method="post">
+      {% csrf_token %}
+      <div class="field">
+        <label>{{ form.password.label }}</label>
+        {{ form.password }}
+        {% for err in form.password.errors %}<div class="field-error">{{ err }}</div>{% endfor %}
+      </div>
+      <div class="check-row">
+        {{ form.confirm }}
+        <label for="{{ form.confirm.id_for_label }}">{{ form.confirm.label }}</label>
+      </div>
+      {% for err in form.confirm.errors %}<div class="field-error">{{ err }}</div>{% endfor %}
+      {% if form.non_field_errors %}
+        <div class="field-error" style="margin-bottom:12px;">{{ form.non_field_errors }}</div>
+      {% endif %}
+      <button type="submit" class="btn btn-danger" style="width:100%;padding:13px;">Permanently delete my account</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

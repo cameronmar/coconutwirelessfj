@@ -415,6 +415,9 @@
         {% if can_message_client %}
           <a href="{% url 'conversation' task.pk task.client.pk %}" class="btn btn-outline-blue btn-sm" style="width:100%;text-align:center;">Message client</a>
         {% endif %}
+        <div style="margin-top:10px;">
+          {% include "marketplace/_report_block_widget.html" with reported_user=task.client report_type="task" task=task is_blocked=is_blocked_with_client reference_note=task.title %}
+        </div>
         {% else %}
         <p class="text-muted" style="font-size:.85rem;margin:0;">Only registered local professionals can see who posted this job.</p>
         {% endif %}

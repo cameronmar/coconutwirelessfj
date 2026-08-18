@@ -1,0 +1,52 @@
+{% comment %}
+Reusable Report/Block widget. Include with:
+  {% include "marketplace/_report_block_widget.html" with reported_user=tradie report_type="user" %}
+Optional context: task (adds task_id to the report), is_blocked (shows
+Unblock instead of Block), widget_id (unique per page if included more than
+once — defaults to the reported user's pk).
+{% endcomment %}
+{% if user.is_authenticated and user != reported_user %}
+<div class="rb-widget">
+  <button type="button" class="btn btn-outline-blue btn-sm" onclick="document.getElementById('reportPanel-{{ widget_id|default:reported_user.pk }}').classList.toggle('rb-open')">🚩 Report</button>
+  {% if is_blocked %}
+    <form method="post" action="{% url 'unblock_user' reported_user.pk %}" style="display:inline;">
+      {% csrf_token %}
+      <input type="hidden" name="next" value="{{ request.path }}">
+      <button type="submit" class="btn btn-outline-blue btn-sm">Unblock</button>
+    </form>
+  {% else %}
+    <form method="post" action="{% url 'block_user' reported_user.pk %}" style="display:inline;" onsubmit="return confirm('Block {{ reported_user.full_name }}? You will no longer be able to message each other.');">
+      {% csrf_token %}
+      <input type="hidden" name="next" value="{{ request.path }}">
+      <button type="submit" class="btn btn-outline-blue btn-sm">🚫 Block</button>
+    </form>
+  {% endif %}
+
+  <div class="rb-panel" id="reportPanel-{{ widget_id|default:reported_user.pk }}">
+    <form method="post" action="{% url 'report_content' %}">
+      {% csrf_token %}
+      <input type="hidden" name="reported_user" value="{{ reported_user.pk }}">
+      <input type="hidden" name="report_type" value="{{ report_type|default:'user' }}">
+      {% if task %}<input type="hidden" name="task_id" value="{{ task.pk }}">{% endif %}
+      {% if reference_note %}<input type="hidden" name="reference_note" value="{{ reference_note }}">{% endif %}
+      <input type="hidden" name="next" value="{{ request.path }}">
+      <select name="reason" class="form-input" required>
+        <option value="">Reason for reporting…</option>
+        <option value="spam">Spam or scam</option>
+        <option value="harassment">Harassment or abuse</option>
+        <option value="inappropriate">Inappropriate content</option>
+        <option value="fraud">Fraud or misrepresentation</option>
+        <option value="other">Other</option>
+      </select>
+      <textarea name="details" class="form-input" rows="2" placeholder="Add details (optional)"></textarea>
+      <button type="submit" class="btn btn-primary btn-sm">Submit report</button>
+    </form>
+  </div>
+</div>
+<style>
+.rb-widget{display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap;}
+.rb-panel{display:none;width:100%;margin-top:10px;}
+.rb-panel.rb-open{display:block;}
+.rb-panel select,.rb-panel textarea{margin-bottom:8px;width:100%;}
+</style>
+{% endif %}

@@ -1,0 +1,42 @@
+{% extends "marketplace/base.html" %}
+{% block title %}Blocked Users – The Coconut Wireless Network{% endblock %}
+
+{% block extra_css %}
+<style>
+.settings-page{max-width:600px;margin:0 auto;padding:28px 20px 50px;}
+.page-title{font-size:1.4rem;font-weight:700;margin:0 0 4px;}
+.page-sub{color:var(--muted);font-size:.9rem;margin:0 0 22px;}
+.block-row{display:flex;align-items:center;justify-content:space-between;padding:12px 0;border-bottom:1px solid #f0f5f8;}
+.block-row:last-child{border-bottom:none;}
+.block-row .name{font-weight:600;font-size:.92rem;}
+.block-row .since{font-size:.8rem;color:var(--muted);}
+.empty-state{color:var(--muted);font-size:.9rem;text-align:center;padding:24px 0;}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="settings-page">
+  <div class="page-title">Blocked users</div>
+  <p class="page-sub">Blocked users can't send or receive Platform messages with you.</p>
+
+  <div class="card">
+    {% if blocks %}
+      {% for block in blocks %}
+        <div class="block-row">
+          <div>
+            <div class="name">{{ block.blocked.full_name }}</div>
+            <div class="since">Blocked {{ block.created_at|date:"d M Y" }}</div>
+          </div>
+          <form method="post" action="{% url 'unblock_user' block.blocked_id %}">
+            {% csrf_token %}
+            <input type="hidden" name="next" value="{% url 'blocked_users' %}">
+            <button type="submit" class="btn btn-outline-blue btn-sm">Unblock</button>
+          </form>
+        </div>
+      {% endfor %}
+    {% else %}
+      <div class="empty-state">You haven't blocked anyone.</div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

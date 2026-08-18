@@ -7,13 +7,15 @@ from pathlib import Path
 from unittest import mock
 
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.db import DatabaseError
+from django.core.exceptions import ValidationError
+from django.db import DatabaseError, IntegrityError, transaction
 from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone as django_timezone
 
 from .forms import ChangePasswordForm, MarketOrderForm, ServiceAreaForm
 from .models import (
+    ContentReport,
     Invoice,
     InvoiceLine,
     MarketListing,
@@ -28,9 +30,11 @@ from .models import (
     QuotingAppointmentSlot,
     SupplierEnquiry,
     SupplierMessage,
+    SupplierProfile,
     Task,
     TradieProfile,
     User,
+    UserBlock,
 )
 from .utils import (
     calculate_market_price_per_unit,
@@ -2509,3 +2513,283 @@ class SupplierMessagePollTests(TestCase):
             self.client.login(username=self.client_user.email, password='Password123')
             response = self.client.get(reverse('supplier_enquiry_messages_poll', args=[self.enquiry.pk]), {'after': 0}, secure=True)
         self.assertEqual(response.status_code, 404)
+
+
+# ── Account deletion, content reporting, user blocking ──────────────────────
+# Google Play / Apple App Store both require a self-service account-deletion
+# path and a way for users to report abuse — see the "would this pass a
+# Google Play review" sweep this branch of work came out of.
+
+class AccountDeletionTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email='deleteme@example.com', password='pass12345',
+            first_name='Delete', last_name='Me', role=User.ROLE_TRADIE, town='Suva',
+        )
+        self.profile = TradieProfile.objects.create(
+            user=self.user, business_name='Delete Me Plumbing', tin='12345',
+            bio='I fix pipes', trades=['plumbing'], service_towns=['Suva'],
+            tin_letter=SimpleUploadedFile('tin.pdf', b'pdf-bytes', content_type='application/pdf'),
+        )
+        self.task = Task.objects.create(
+            client=self.user, title='Old job', category='plumbing',
+            description='d', budget=Decimal('100'), town='Suva',
+        )
+
+    def test_delete_account_requires_login(self):
+        response = self.client.get(reverse('delete_account'), secure=True)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(reverse('login'), response.url)
+
+    def test_wrong_password_rejected(self):
+        self.client.login(username=self.user.email, password='pass12345')
+        response = self.client.post(
+            reverse('delete_account'), {'password': 'wrong-password', 'confirm': 'on'}, secure=True,
+        )
+        self.assertEqual(response.status_code, 200)  # re-renders with form error
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.is_active)
+        self.assertIsNone(self.user.account_deleted_at)
+
+    def test_missing_confirmation_checkbox_rejected(self):
+        self.client.login(username=self.user.email, password='pass12345')
+        response = self.client.post(reverse('delete_account'), {'password': 'pass12345'}, secure=True)
+        self.assertEqual(response.status_code, 200)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.is_active)
+
+    def test_successful_deletion_anonymizes_and_deactivates(self):
+        user_pk = self.user.pk
+        self.client.login(username=self.user.email, password='pass12345')
+        response = self.client.post(
+            reverse('delete_account'), {'password': 'pass12345', 'confirm': 'on'}, secure=True,
+        )
+        self.assertEqual(response.status_code, 302)
+        self.user.refresh_from_db()
+        self.assertFalse(self.user.is_active)
+        self.assertIsNotNone(self.user.account_deleted_at)
+        self.assertEqual(self.user.email, f'deleted-user-{user_pk}@deleted.coconutwireless.fj')
+        self.assertEqual(self.user.first_name, '')
+        self.assertEqual(self.user.last_name, '')
+        self.assertEqual(self.user.mobile, '')
+        self.assertFalse(self.user.has_usable_password())
+
+    def test_deletion_scrubs_profile_pii_and_documents(self):
+        self.client.login(username=self.user.email, password='pass12345')
+        self.client.post(reverse('delete_account'), {'password': 'pass12345', 'confirm': 'on'}, secure=True)
+        self.profile.refresh_from_db()
+        self.assertEqual(self.profile.business_name, '')
+        self.assertEqual(self.profile.bio, '')
+        self.assertFalse(self.profile.tin_letter)
+
+    def test_deletion_logs_the_user_out(self):
+        self.client.login(username=self.user.email, password='pass12345')
+        self.client.post(reverse('delete_account'), {'password': 'pass12345', 'confirm': 'on'}, secure=True)
+        self.assertNotIn('_auth_user_id', self.client.session)
+
+    def test_deleted_user_cannot_log_back_in(self):
+        self.client.login(username=self.user.email, password='pass12345')
+        self.client.post(reverse('delete_account'), {'password': 'pass12345', 'confirm': 'on'}, secure=True)
+        self.client.logout()
+        response = self.client.post(
+            reverse('login'), {'email': 'deleteme@example.com', 'password': 'pass12345'}, secure=True,
+        )
+        self.assertNotIn('_auth_user_id', self.client.session)
+
+    def test_financial_and_task_records_survive_deletion(self):
+        self.client.login(username=self.user.email, password='pass12345')
+        self.client.post(reverse('delete_account'), {'password': 'pass12345', 'confirm': 'on'}, secure=True)
+        self.assertTrue(Task.objects.filter(pk=self.task.pk).exists())
+        self.assertTrue(User.objects.filter(pk=self.user.pk).exists())  # anonymized, not hard-deleted
+
+
+class ContentReportTests(TestCase):
+    def setUp(self):
+        self.reporter = User.objects.create_user(
+            email='reporter@example.com', password='pass12345',
+            first_name='Report', last_name='Er', role=User.ROLE_CLIENT, town='Suva',
+        )
+        self.target = User.objects.create_user(
+            email='reported@example.com', password='pass12345',
+            first_name='Bad', last_name='Actor', role=User.ROLE_TRADIE, town='Suva',
+        )
+
+    def test_report_requires_login(self):
+        response = self.client.post(reverse('report_content'), {'reported_user': self.target.pk, 'reason': 'spam'}, secure=True)
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(ContentReport.objects.exists())
+
+    def test_valid_report_creates_record(self):
+        self.client.login(username=self.reporter.email, password='pass12345')
+        response = self.client.post(reverse('report_content'), {
+            'reported_user': self.target.pk, 'report_type': 'user', 'reason': 'harassment', 'details': 'Sent abusive messages',
+        }, secure=True)
+        self.assertEqual(response.status_code, 302)
+        report = ContentReport.objects.get()
+        self.assertEqual(report.reporter, self.reporter)
+        self.assertEqual(report.reported_user, self.target)
+        self.assertEqual(report.reason, ContentReport.REASON_HARASSMENT)
+        self.assertEqual(report.status, ContentReport.STATUS_OPEN)
+
+    def test_cannot_report_self(self):
+        self.client.login(username=self.reporter.email, password='pass12345')
+        response = self.client.post(reverse('report_content'), {
+            'reported_user': self.reporter.pk, 'reason': 'spam',
+        }, secure=True)
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(ContentReport.objects.exists())
+
+    def test_missing_reason_rejected(self):
+        self.client.login(username=self.reporter.email, password='pass12345')
+        response = self.client.post(reverse('report_content'), {'reported_user': self.target.pk}, secure=True)
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(ContentReport.objects.exists())
+
+    def test_report_can_reference_a_task(self):
+        task = Task.objects.create(
+            client=self.target, title='Bad job', category='plumbing',
+            description='d', budget=Decimal('100'), town='Suva',
+        )
+        self.client.login(username=self.reporter.email, password='pass12345')
+        self.client.post(reverse('report_content'), {
+            'reported_user': self.target.pk, 'report_type': 'task', 'task_id': task.pk, 'reason': 'fraud',
+        }, secure=True)
+        report = ContentReport.objects.get()
+        self.assertEqual(report.task, task)
+        self.assertEqual(report.report_type, ContentReport.TYPE_TASK)
+
+
+class UserBlockModelTests(TestCase):
+    def setUp(self):
+        self.user_a = User.objects.create_user(email='blocka@example.com', password='p', role=User.ROLE_CLIENT, town='Suva', first_name='A', last_name='User')
+        self.user_b = User.objects.create_user(email='blockb@example.com', password='p', role=User.ROLE_TRADIE, town='Suva', first_name='B', last_name='User')
+
+    def test_exists_between_is_symmetric(self):
+        self.assertFalse(UserBlock.exists_between(self.user_a, self.user_b))
+        UserBlock.objects.create(blocker=self.user_a, blocked=self.user_b)
+        self.assertTrue(UserBlock.exists_between(self.user_a, self.user_b))
+        self.assertTrue(UserBlock.exists_between(self.user_b, self.user_a))
+
+    def test_duplicate_block_rejected_by_constraint(self):
+        UserBlock.objects.create(blocker=self.user_a, blocked=self.user_b)
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                UserBlock.objects.create(blocker=self.user_a, blocked=self.user_b)
+
+    def test_self_block_rejected_by_clean(self):
+        block = UserBlock(blocker=self.user_a, blocked=self.user_a)
+        with self.assertRaises(ValidationError):
+            block.full_clean()
+
+
+class UserBlockViewTests(TestCase):
+    def setUp(self):
+        self.user_a = User.objects.create_user(email='viewblocka@example.com', password='pass12345', role=User.ROLE_CLIENT, town='Suva', first_name='A', last_name='User')
+        self.user_b = User.objects.create_user(email='viewblockb@example.com', password='pass12345', role=User.ROLE_TRADIE, town='Suva', first_name='B', last_name='User')
+
+    def test_block_user(self):
+        self.client.login(username=self.user_a.email, password='pass12345')
+        response = self.client.post(reverse('block_user', args=[self.user_b.pk]), secure=True)
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(UserBlock.objects.filter(blocker=self.user_a, blocked=self.user_b).exists())
+
+    def test_cannot_block_self(self):
+        self.client.login(username=self.user_a.email, password='pass12345')
+        response = self.client.post(reverse('block_user', args=[self.user_a.pk]), secure=True)
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(UserBlock.objects.exists())
+
+    def test_blocked_users_page_lists_blocks(self):
+        UserBlock.objects.create(blocker=self.user_a, blocked=self.user_b)
+        self.client.login(username=self.user_a.email, password='pass12345')
+        response = self.client.get(reverse('blocked_users'), secure=True)
+        self.assertContains(response, self.user_b.full_name)
+
+    def test_unblock_removes_block(self):
+        UserBlock.objects.create(blocker=self.user_a, blocked=self.user_b)
+        self.client.login(username=self.user_a.email, password='pass12345')
+        response = self.client.post(reverse('unblock_user', args=[self.user_b.pk]), secure=True)
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(UserBlock.objects.filter(blocker=self.user_a, blocked=self.user_b).exists())
+
+
+class MessageBlockingEnforcementTests(TestCase):
+    def setUp(self):
+        self.client_user = User.objects.create_user(
+            email='msgblock-client@example.com', password='pass12345',
+            first_name='Msg', last_name='Client', role=User.ROLE_CLIENT, town='Suva',
+        )
+        self.tradie_user = User.objects.create_user(
+            email='msgblock-tradie@example.com', password='pass12345',
+            first_name='Msg', last_name='Tradie', role=User.ROLE_TRADIE, town='Suva',
+        )
+        self.task = Task.objects.create(
+            client=self.client_user, title='Job', category='plumbing', description='d',
+            budget=Decimal('100'), town='Suva', assigned_tradie=self.tradie_user,
+        )
+
+    def test_blocked_pair_cannot_send_message(self):
+        UserBlock.objects.create(blocker=self.tradie_user, blocked=self.client_user)
+        self.client.login(username=self.client_user.email, password='pass12345')
+        response = self.client.post(
+            reverse('conversation', args=[self.task.pk, self.tradie_user.pk]), {'body': 'hello'}, secure=True,
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(Message.objects.exists())
+
+    def test_unblocked_pair_can_still_message(self):
+        self.client.login(username=self.client_user.email, password='pass12345')
+        response = self.client.post(
+            reverse('conversation', args=[self.task.pk, self.tradie_user.pk]), {'body': 'hello'}, secure=True,
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(Message.objects.filter(body='hello').exists())
+
+
+class SupplierMessageBlockingEnforcementTests(TestCase):
+    def setUp(self):
+        self.client_user = User.objects.create_user(
+            email='sblock-client@example.com', password='pass12345',
+            first_name='S', last_name='Client', role=User.ROLE_CLIENT, town='Suva',
+        )
+        self.supplier_user = User.objects.create_user(
+            email='sblock-supplier@example.com', password='pass12345',
+            first_name='S', last_name='Supplier', role=User.ROLE_SUPPLIER, town='Suva',
+        )
+        self.enquiry = SupplierEnquiry.objects.create(
+            client=self.client_user, supplier=self.supplier_user,
+            title='Need cement', description='50 bags', town='Suva',
+        )
+
+    def test_blocked_pair_cannot_send_supplier_message(self):
+        UserBlock.objects.create(blocker=self.supplier_user, blocked=self.client_user)
+        self.client.login(username=self.client_user.email, password='pass12345')
+        response = self.client.post(
+            reverse('supplier_enquiry_messages', args=[self.enquiry.pk]), {'body': 'hello'}, secure=True,
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(SupplierMessage.objects.exists())
+
+
+class ContentReportAdminTests(TestCase):
+    def setUp(self):
+        self.admin_user = User.objects.create_superuser(email='reportadmin@example.com', password='pass12345')
+        self.reporter = User.objects.create_user(email='radmin-reporter@example.com', password='p', role=User.ROLE_CLIENT, town='Suva', first_name='R', last_name='User')
+        self.target = User.objects.create_user(email='radmin-target@example.com', password='p', role=User.ROLE_TRADIE, town='Suva', first_name='T', last_name='User')
+        self.report = ContentReport.objects.create(reporter=self.reporter, reported_user=self.target, reason=ContentReport.REASON_SPAM)
+
+    def test_mark_actioned_action_updates_status(self):
+        from marketplace.admin import ContentReportAdmin
+        from django.contrib.admin.sites import site
+        model_admin = ContentReportAdmin(ContentReport, site)
+        from django.test import RequestFactory
+        from django.contrib.messages.storage.fallback import FallbackStorage
+        request = RequestFactory().post('/admin/marketplace/contentreport/')
+        request.user = self.admin_user
+        setattr(request, 'session', {})
+        setattr(request, '_messages', FallbackStorage(request))
+        model_admin.mark_actioned(request, ContentReport.objects.filter(pk=self.report.pk))
+        self.report.refresh_from_db()
+        self.assertEqual(self.report.status, ContentReport.STATUS_ACTIONED)
+        self.assertEqual(self.report.reviewed_by, self.admin_user)
+        self.assertIsNotNone(self.report.reviewed_at)

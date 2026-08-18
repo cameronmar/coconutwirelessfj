@@ -34,6 +34,8 @@ from .forms import (
     ChangePasswordForm,
     ClientRegistrationForm,
     ContactSupportForm,
+    ContentReportForm,
+    DeleteAccountForm,
     LoginForm,
     MarketListingForm,
     MarketOrderForm,
@@ -54,6 +56,7 @@ from .forms import (
     TradieRegistrationForm,
 )
 from .models import (
+    ContentReport,
     Invoice,
     MarketListing,
     MarketOrder,
@@ -66,6 +69,7 @@ from .models import (
     QuotingAppointment,
     QuotingAppointmentSlot,
     Sponsor,
+    UserBlock,
     SupplierEnquiry,
     SupplierProfile,
     SupplierMessage,
@@ -897,6 +901,9 @@ def task_detail(request, pk):
         'sponsors':        Sponsor.get_active_for_placement('task_detail_sidebar'),
         'founding_credit_balance': founding_credit_balance,
         'check_promo_code_url': reverse('check_promo_code', args=[task.pk]),
+        'is_blocked_with_client': (
+            request.user.is_authenticated and UserBlock.exists_between(request.user, task.client)
+        ),
     })
 
 
@@ -1304,6 +1311,7 @@ def tradie_profile(request, pk):
         })
     overall = round(total / 6, 1) if count else 0
 
+    is_blocked = request.user.is_authenticated and UserBlock.exists_between(request.user, tradie)
     return render(request, 'marketplace/tradie_profile.html', {
         'tradie':        tradie,
         'profile':       profile,
@@ -1312,6 +1320,7 @@ def tradie_profile(request, pk):
         'criteria_data': criteria_data,
         'overall':       overall,
         'jobs_done':     tradie.assigned_tasks.filter(status=Task.STATUS_COMPLETED).count(),
+        'is_blocked':    is_blocked,
     })
 
 
@@ -1367,6 +1376,127 @@ def change_password(request):
     return render(request, 'marketplace/change_password.html', {'form': form})
 
 
+@login_required
+def delete_account(request):
+    """
+    Self-service account deletion — required by both Apple's and Google's
+    developer policies (an in-app *and* web-reachable way to delete an
+    account, not just a support-ticket request). The row is anonymized and
+    deactivated, never hard-deleted: Task/Quote/Invoice/PlatformFee/
+    reviews/etc. all reference User and must survive for the financial and
+    dispute record-keeping the Privacy Policy promises to retain.
+    """
+    form = DeleteAccountForm(request.POST or None, user=request.user)
+    if request.method == 'POST' and form.is_valid():
+        user = request.user
+        with transaction.atomic():
+            if hasattr(user, 'tradie_profile'):
+                profile = user.tradie_profile
+                profile.business_name = ''
+                profile.tin = ''
+                profile.bio = ''
+                for field_name in ('tin_letter', 'business_licence', 'public_liability_insurance',
+                                    'electrical_contractors_licence', 'plumber_licence'):
+                    file_field = getattr(profile, field_name)
+                    if file_field:
+                        file_field.delete(save=False)
+                profile.save()
+            if hasattr(user, 'supplier_profile'):
+                profile = user.supplier_profile
+                profile.business_name = ''
+                profile.tin = ''
+                profile.bio = ''
+                for field_name in ('tin_letter', 'business_registration', 'import_export_licence'):
+                    file_field = getattr(profile, field_name)
+                    if file_field:
+                        file_field.delete(save=False)
+                profile.save()
+
+            user.email      = f'deleted-user-{user.pk}@deleted.coconutwireless.fj'
+            user.first_name = ''
+            user.last_name  = ''
+            user.mobile     = ''
+            user.town       = ''
+            user.fcm_token  = ''
+            user.set_unusable_password()
+            user.is_active  = False
+            user.account_deleted_at = timezone.now()
+            user.save()
+        logout(request)
+        flash.success(request, 'Your account has been deleted.')
+        return redirect('home')
+    return render(request, 'marketplace/delete_account.html', {'form': form})
+
+
+# ── Content reporting & blocking ─────────────────────────────────────────────
+
+@login_required
+@require_POST
+def report_content(request):
+    """
+    Generic report submission, posted from a "Report" button on a task,
+    profile, or message thread (a hidden reported_user/report_type/task_id
+    field identifies what's being reported). Always tied to a
+    reported_user — the person whose conduct is being flagged — so staff
+    always have someone to review in the admin.
+    """
+    reported_user_id = request.POST.get('reported_user')
+    report_type = request.POST.get('report_type', ContentReport.TYPE_USER)
+    task_id = request.POST.get('task_id')
+    reference_note = (request.POST.get('reference_note') or '').strip()[:255]
+    next_url = request.POST.get('next') or reverse('dashboard')
+
+    reported_user = User.objects.filter(pk=reported_user_id).first() if reported_user_id else None
+    if not reported_user or reported_user == request.user:
+        flash.error(request, "Couldn't submit that report.")
+        return redirect(next_url)
+
+    task = Task.objects.filter(pk=task_id).first() if task_id else None
+
+    form = ContentReportForm(request.POST)
+    if form.is_valid():
+        ContentReport.objects.create(
+            reporter=request.user,
+            reported_user=reported_user,
+            report_type=report_type if report_type in dict(ContentReport.TYPE_CHOICES) else ContentReport.TYPE_USER,
+            task=task,
+            reference_note=reference_note,
+            reason=form.cleaned_data['reason'],
+            details=form.cleaned_data['details'],
+        )
+        flash.success(request, 'Thanks — your report has been sent to our team for review.')
+    else:
+        flash.error(request, 'Please select a reason for your report.')
+    return redirect(next_url)
+
+
+@login_required
+@require_POST
+def block_user(request, pk):
+    target = get_object_or_404(User, pk=pk)
+    next_url = request.POST.get('next') or reverse('dashboard')
+    if target == request.user:
+        flash.error(request, "You can't block yourself.")
+        return redirect(next_url)
+    UserBlock.objects.get_or_create(blocker=request.user, blocked=target)
+    flash.success(request, f'{target.full_name} has been blocked. You will no longer be able to message each other.')
+    return redirect(next_url)
+
+
+@login_required
+@require_POST
+def unblock_user(request, pk):
+    UserBlock.objects.filter(blocker=request.user, blocked_id=pk).delete()
+    flash.success(request, 'User unblocked.')
+    return redirect(request.POST.get('next') or reverse('blocked_users'))
+
+
+@login_required
+def blocked_users(request):
+    blocks = UserBlock.objects.filter(blocker=request.user).select_related('blocked').order_by('-created_at')
+    return render(request, 'marketplace/blocked_users.html', {'blocks': blocks})
+
+
 # ── Messages inbox ────────────────────────────────────────────────────────────
 
 @login_required
@@ -1393,7 +1523,12 @@ def conversation(request, tpk, opk):
     if u.pk not in party_ids or other_user.pk not in party_ids:
         raise PermissionDenied
 
+    blocked = UserBlock.exists_between(u, other_user)
+
     if request.method == 'POST':
+        if blocked:
+            flash.error(request, "You can't message this user.")
+            return redirect('conversation', tpk=tpk, opk=opk)
         form = MessageForm(request.POST)
         if form.is_valid():
             msg = Message.objects.create(
@@ -1424,6 +1559,7 @@ def conversation(request, tpk, opk):
         'active_other':  other_user,
         'chat_messages': chat_messages,
         'compose_form':  MessageForm(),
+        'is_blocked':    blocked,
     })
 
 
@@ -1921,6 +2057,7 @@ def supplier_profile(request, pk):
         and request.user != supplier_user
         and profile.can_receive_enquiries()
     )
+    is_blocked = request.user.is_authenticated and UserBlock.exists_between(request.user, supplier_user)
     return render(request, 'marketplace/supplier_profile.html', {
         'supplier': supplier_user,
         'profile': profile,
@@ -1928,6 +2065,7 @@ def supplier_profile(request, pk):
         'criteria_data': criteria_data,
         'reviews': reviews,
         'can_enquire': can_enquire,
+        'is_blocked': is_blocked,
     })
 
 
@@ -2113,7 +2251,11 @@ def supplier_enquiry_messages(request, pk):
     if request.user not in (enquiry.client, enquiry.supplier):
         raise PermissionDenied
     other = enquiry.supplier if request.user == enquiry.client else enquiry.client
+    blocked = UserBlock.exists_between(request.user, other)
     if request.method == 'POST':
+        if blocked:
+            flash.error(request, "You can't message this user.")
+            return redirect('supplier_enquiry_messages', pk=pk)
         body = request.POST.get('body', '').strip()
         if body:
             SupplierMessage.objects.create(
@@ -2148,6 +2290,7 @@ def supplier_enquiry_messages(request, pk):
         'enquiry': enquiry,
         'chat_messages': messages_qs,
         'other': other,
+        'is_blocked': blocked,
     })
 
 

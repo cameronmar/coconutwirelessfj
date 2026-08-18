@@ -18,6 +18,7 @@ from django.utils import timezone
 
 from .constants import TOWN_CHOICES
 from .models import (
+    ContentReport,
     MarketListing,
     MarketOrder,
     Message,
@@ -46,6 +47,7 @@ from .models import (
     InvoiceLine,
     InvoiceNotification,
     User,
+    UserBlock,
 )
 from .utils import (
     build_invoice_line_description,
@@ -89,6 +91,7 @@ class UserAdmin(BaseUserAdmin):
     list_filter  = ['role', 'town', 'is_tester', 'is_market_founding_member', 'is_active', HasAcceptedTermsFilter]
     search_fields = ['email', 'first_name', 'last_name']
     actions = ['grant_tester_access', 'revoke_tester_access']
+    readonly_fields = ['account_deleted_at']
     fieldsets = (
         (None,           {'fields': ('email', 'password')}),
         ('Personal',     {'fields': ('first_name', 'last_name', 'mobile', 'town', 'role')}),
@@ -96,6 +99,7 @@ class UserAdmin(BaseUserAdmin):
         ('Market Founding Seller', {'fields': ('is_market_founding_member', 'market_founding_credit_balance')}),
         ('Permissions',  {'fields': ('is_active', 'is_staff', 'is_superuser', 'groups', 'user_permissions')}),
         ('Dates',        {'fields': ('last_login', 'date_joined')}),
+        ('Account Deletion', {'fields': ('account_deleted_at',), 'description': 'Set automatically when a user deletes their own account (self-service — see views.delete_account). Never set manually.'}),
     )
     add_fieldsets = (
         (None, {
@@ -1264,4 +1268,38 @@ class SupplierMessageAdmin(admin.ModelAdmin):
     list_filter = ('deleted_at',)
     raw_id_fields = ('sender', 'recipient', 'enquiry')
     readonly_fields = ('edited_at', 'deleted_at', 'edit_history')
+
+
+# ── Trust & safety ────────────────────────────────────────────────────────────
+
+@admin.register(ContentReport)
+class ContentReportAdmin(admin.ModelAdmin):
+    list_display = ('reported_user', 'reason', 'report_type', 'status', 'reporter', 'created_at')
+    list_filter = ('status', 'reason', 'report_type', 'created_at')
+    search_fields = ('reporter__email', 'reported_user__email', 'details')
+    raw_id_fields = ('reporter', 'reported_user', 'task', 'reviewed_by')
+    readonly_fields = ('reporter', 'reported_user', 'report_type', 'task', 'reference_note', 'reason', 'details', 'created_at')
+    actions = ['mark_actioned', 'mark_dismissed']
+
+    fieldsets = (
+        ('Report', {'fields': ('reporter', 'reported_user', 'report_type', 'task', 'reference_note', 'reason', 'details', 'created_at')}),
+        ('Review', {'fields': ('status', 'reviewed_by', 'reviewed_at', 'resolution_note')}),
+    )
+
+    @admin.action(description='Mark selected reports as actioned')
+    def mark_actioned(self, request, queryset):
+        updated = queryset.update(status=ContentReport.STATUS_ACTIONED, reviewed_by=request.user, reviewed_at=timezone.now())
+        messages.success(request, f'{updated} report(s) marked as actioned.')
+
+    @admin.action(description='Dismiss selected reports')
+    def mark_dismissed(self, request, queryset):
+        updated = queryset.update(status=ContentReport.STATUS_DISMISSED, reviewed_by=request.user, reviewed_at=timezone.now())
+        messages.success(request, f'{updated} report(s) dismissed.')
+
+
+@admin.register(UserBlock)
+class UserBlockAdmin(admin.ModelAdmin):
+    list_display = ('blocker', 'blocked', 'created_at')
+    search_fields = ('blocker__email', 'blocked__email')
+    raw_id_fields = ('blocker', 'blocked')
 

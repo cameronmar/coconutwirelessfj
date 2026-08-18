@@ -103,6 +103,7 @@ footer{display:none;}
           <div class="cs">{{ active_other.town }}</div>
         </div>
         <a href="{% url 'task_detail' active_task.pk %}" class="task-link">{{ active_task.title|truncatechars:28 }}</a>
+        {% include "marketplace/_report_block_widget.html" with reported_user=active_other report_type="message" task=active_task is_blocked=is_blocked widget_id="thread" %}
       </div>
 
       <div class="chat-body" id="chatBody" data-poll-url="{% url 'conversation_poll' active_task.pk active_other.pk %}" data-latest-id="{{ chat_messages.last.pk|default:0 }}">
@@ -116,6 +117,11 @@ footer{display:none;}
         {% endfor %}
       </div>
 
+      {% if is_blocked %}
+      <div class="chat-input">
+        <p class="text-muted" style="margin:0;font-size:.85rem;">You can't message this user.</p>
+      </div>
+      {% else %}
       <div class="chat-input">
         <form method="post" action="{% url 'conversation' active_task.pk active_other.pk %}" style="display:contents;" onsubmit="return guardSubmit(this);">
           {% csrf_token %}
@@ -123,6 +129,7 @@ footer{display:none;}
           <button type="submit">Send →</button>
         </form>
       </div>
+      {% endif %}
 
     {% else %}
       <div class="empty-state">

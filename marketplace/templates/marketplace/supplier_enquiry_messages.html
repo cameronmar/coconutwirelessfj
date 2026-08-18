@@ -55,6 +55,7 @@ footer{display:none;}
       <div class="cs">{{ other.town }}</div>
     </div>
     <a href="{% url 'enquiry_detail' pk=enquiry.pk %}" class="enq-link">{{ enquiry.title|truncatechars:32 }}</a>
+    {% include "marketplace/_report_block_widget.html" with reported_user=other report_type="message" is_blocked=is_blocked widget_id="enquiry" %}
   </div>
 
   <div class="chat-body" id="chatBody" data-poll-url="{% url 'supplier_enquiry_messages_poll' enquiry.pk %}" data-latest-id="{{ chat_messages.last.pk|default:0 }}">
@@ -68,6 +69,11 @@ footer{display:none;}
     {% endfor %}
   </div>
 
+  {% if is_blocked %}
+  <div class="chat-input">
+    <p class="text-muted" style="margin:0;font-size:.85rem;">You can't message this user.</p>
+  </div>
+  {% else %}
   <div class="chat-input">
     <form method="post" action="{% url 'supplier_enquiry_messages' pk=enquiry.pk %}" style="display:contents;" onsubmit="return guardSubmit(this);">
       {% csrf_token %}
@@ -75,6 +81,7 @@ footer{display:none;}
       <button type="submit">Send →</button>
     </form>
   </div>
+  {% endif %}
 </div>
 {% endblock %}
 

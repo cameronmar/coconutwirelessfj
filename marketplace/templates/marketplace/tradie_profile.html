@@ -81,6 +81,7 @@
           <a href="{% url 'post_task' %}" class="btn btn-primary">Post a job</a>
           <a href="{% url 'inbox' %}" class="btn btn-outline-blue">Message</a>
         {% endif %}{% endif %}
+        {% include "marketplace/_report_block_widget.html" with reported_user=tradie report_type="user" %}
       </div>
     </div>
   </div>

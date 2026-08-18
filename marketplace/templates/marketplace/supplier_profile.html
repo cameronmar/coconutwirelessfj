@@ -67,6 +67,7 @@
         {% if can_enquire %}
           <a href="{% url 'send_enquiry' supplier_pk=supplier.pk %}" class="btn btn-primary">Send Enquiry</a>
         {% endif %}
+        {% include "marketplace/_report_block_widget.html" with reported_user=supplier report_type="user" %}
       </div>
     </div>
   </div>

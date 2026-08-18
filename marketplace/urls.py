@@ -16,6 +16,12 @@ urlpatterns = [
     path('password-reset/',        views.password_reset_request, name='password_reset_request'),
     path('password-reset/<str:uidb64>/<str:token>/', views.password_reset_confirm, name='password_reset_confirm'),
     path('account/change-password/', views.change_password, name='change_password'),
+    path('account/delete/',        views.delete_account, name='delete_account'),
+    # Trust & safety
+    path('report/',                          views.report_content, name='report_content'),
+    path('users/<int:pk>/block/',            views.block_user,     name='block_user'),
+    path('users/<int:pk>/unblock/',          views.unblock_user,   name='unblock_user'),
+    path('account/blocked/',                 views.blocked_users,  name='blocked_users'),
     path('dashboard/',             views.dashboard,     name='dashboard'),
     # Dashboards
     path('dashboard/client/',      views.client_dashboard, name='client_dashboard'),

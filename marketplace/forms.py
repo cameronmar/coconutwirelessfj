@@ -8,7 +8,7 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 
 from .constants import TOWN_CHOICES, EXPERIENCE_CHOICES, FOUNDING_MEMBER_SLOTS, FOUNDING_MEMBER_CREDIT
-from .models import User, TradieProfile, Task, Quote, Message, TradeCategory, TaskPhoto, MarketListing, MarketOrder, PlatformSettings, SupplyCategory, SupplierProfile
+from .models import User, TradieProfile, Task, Quote, Message, TradeCategory, TaskPhoto, MarketListing, MarketOrder, PlatformSettings, SupplyCategory, SupplierProfile, ContentReport
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -908,3 +908,39 @@ class SupplierQuoteResponseForm(forms.Form):
         if cd.get('status') == 'modification_requested' and not (cd.get('modification_note') or '').strip():
             raise ValidationError('Please describe what modifications you need.')
         return cd
+
+
+# ── Account deletion ──────────────────────────────────────────────────────────
+
+class DeleteAccountForm(forms.Form):
+    """Requires re-entering the current password so a hijacked/left-open
+    session can't be used to delete an account with one click."""
+    password = forms.CharField(
+        label='Confirm your password',
+        widget=forms.PasswordInput(attrs={'class': 'form-input', 'placeholder': 'Enter your password to confirm'}),
+    )
+    confirm = forms.BooleanField(
+        required=True,
+        label='I understand this will permanently deactivate my account',
+        error_messages={'required': 'Please confirm you understand this action.'},
+    )
+
+    def __init__(self, *args, user=None, **kwargs):
+        self.user = user
+        super().__init__(*args, **kwargs)
+
+    def clean_password(self):
+        password = self.cleaned_data['password']
+        if not self.user or not self.user.check_password(password):
+            raise ValidationError('Incorrect password.')
+        return password
+
+
+# ── Content reporting ─────────────────────────────────────────────────────────
+
+class ContentReportForm(forms.Form):
+    reason  = forms.ChoiceField(choices=ContentReport.REASON_CHOICES, widget=_select())
+    details = forms.CharField(
+        required=False,
+        widget=forms.Textarea(attrs={'class': 'form-input', 'rows': 4, 'placeholder': 'Add any details that will help us review this…'}),
+    )

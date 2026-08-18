@@ -2,6 +2,7 @@ from decimal import Decimal
 
 from django.contrib.auth.models import AbstractUser, BaseUserManager
 from django.core.cache import cache
+from django.core.exceptions import ValidationError
 from django.core.validators import MinValueValidator, MaxValueValidator
 from django.db import models
 
@@ -82,6 +83,14 @@ class User(AbstractUser):
     # Not part of ROLE_CHOICES since it's an orthogonal capability, not an
     # account type.
     is_tester = models.BooleanField(default=False, verbose_name='Beta tester (can preview unlaunched features)')
+
+    # Self-service account deletion (views.delete_account). The row itself
+    # is never hard-deleted — Task/Quote/Invoice/PlatformFee/etc. all
+    # reference User and must survive for financial/dispute record-keeping
+    # (see Terms §6, Privacy Policy). Deletion instead anonymizes the
+    # account's own PII fields and deactivates login; account_deleted_at
+    # marks when that happened.
+    account_deleted_at = models.DateTimeField(null=True, blank=True)
 
     USERNAME_FIELD  = 'email'
     REQUIRED_FIELDS = []
@@ -1537,6 +1546,103 @@ class SupplierMessage(models.Model):
 
     def __str__(self):
         return f'Msg from {self.sender} on enquiry #{self.enquiry_id}'
+
+
+# ── Content reporting & user blocking ─────────────────────────────────────────
+
+class ContentReport(models.Model):
+    """User-submitted report of abusive/inappropriate content or conduct —
+    reviewed by staff in the admin (see admin.py). Not auto-actioned;
+    staff decide the outcome and record it here."""
+    REASON_SPAM           = 'spam'
+    REASON_HARASSMENT     = 'harassment'
+    REASON_INAPPROPRIATE  = 'inappropriate'
+    REASON_FRAUD          = 'fraud'
+    REASON_OTHER          = 'other'
+    REASON_CHOICES = [
+        (REASON_SPAM,          'Spam or scam'),
+        (REASON_HARASSMENT,    'Harassment or abuse'),
+        (REASON_INAPPROPRIATE, 'Inappropriate content'),
+        (REASON_FRAUD,         'Fraud or misrepresentation'),
+        (REASON_OTHER,         'Other'),
+    ]
+
+    TYPE_USER    = 'user'
+    TYPE_TASK    = 'task'
+    TYPE_MESSAGE = 'message'
+    TYPE_REVIEW  = 'review'
+    TYPE_CHOICES = [
+        (TYPE_USER,    'User / Profile'),
+        (TYPE_TASK,    'Task'),
+        (TYPE_MESSAGE, 'Message'),
+        (TYPE_REVIEW,  'Review'),
+    ]
+
+    STATUS_OPEN      = 'open'
+    STATUS_ACTIONED  = 'actioned'
+    STATUS_DISMISSED = 'dismissed'
+    STATUS_CHOICES = [
+        (STATUS_OPEN,      'Open'),
+        (STATUS_ACTIONED,  'Actioned'),
+        (STATUS_DISMISSED, 'Dismissed'),
+    ]
+
+    reporter      = models.ForeignKey(User, on_delete=models.CASCADE, related_name='reports_filed')
+    reported_user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='reports_received', null=True, blank=True)
+    report_type   = models.CharField(max_length=20, choices=TYPE_CHOICES, default=TYPE_USER)
+    task          = models.ForeignKey(Task, on_delete=models.SET_NULL, null=True, blank=True, related_name='reports')
+    reference_note = models.CharField(max_length=255, blank=True, help_text='e.g. which message/review this report is about')
+
+    reason  = models.CharField(max_length=20, choices=REASON_CHOICES)
+    details = models.TextField(blank=True)
+
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_OPEN, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    reviewed_by     = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='reports_reviewed')
+    reviewed_at     = models.DateTimeField(null=True, blank=True)
+    resolution_note = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = 'Content Report'
+        verbose_name_plural = 'Content Reports'
+
+    def __str__(self):
+        return f'Report by {self.reporter} – {self.get_reason_display()} ({self.status})'
+
+
+class UserBlock(models.Model):
+    """One-directional block: blocker no longer sends/receives Platform
+    messages with blocked (see the block check in views.conversation and
+    views.supplier_enquiry_messages). Blocking is not mutual by itself —
+    the blocked user isn't notified and can independently block back."""
+    blocker = models.ForeignKey(User, on_delete=models.CASCADE, related_name='blocks_made')
+    blocked = models.ForeignKey(User, on_delete=models.CASCADE, related_name='blocked_by')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = 'User Block'
+        verbose_name_plural = 'User Blocks'
+        constraints = [
+            models.UniqueConstraint(fields=['blocker', 'blocked'], name='unique_user_block'),
+        ]
+
+    def __str__(self):
+        return f'{self.blocker} blocked {self.blocked}'
+
+    def clean(self):
+        if self.blocker_id and self.blocked_id and self.blocker_id == self.blocked_id:
+            raise ValidationError('A user cannot block themselves.')
+
+    @classmethod
+    def exists_between(cls, user_a, user_b):
+        """True if either user has blocked the other — used to gate
+        message-sending in both directions regardless of who blocked whom."""
+        return cls.objects.filter(
+            models.Q(blocker=user_a, blocked=user_b) | models.Q(blocker=user_b, blocked=user_a)
+        ).exists()
 
 
 # ── Signals ─────────────────────────────────────────────────────────────────────
