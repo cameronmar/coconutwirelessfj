@@ -963,7 +963,7 @@ def notify_matching_tradies_new_job(task):
             f'Bula {profile.user.first_name},\n\n'
             f'A new job matching your trades was just posted in {task.get_town_display()}:\n\n'
             f'"{task.title}"\n{task.description[:200]}\n\n'
-            f'Budget: FJD ${task.budget}\n\n'
+            f'Budget: {task.budget_display}\n\n'
             f'Log in to view the task and send a quote.\n\n'
             f'Vinaka,\nThe Coconut Wireless Network Team'
         )

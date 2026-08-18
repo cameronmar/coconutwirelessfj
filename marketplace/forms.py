@@ -332,6 +332,11 @@ class TaskForm(forms.ModelForm):
         choices=DATE_TYPE_CHOICES, required=False,
         widget=forms.RadioSelect(attrs={'class': 'form-radio'}),
     )
+    budget_negotiable = forms.BooleanField(
+        required=False,
+        label="I'm not sure — my budget is negotiable",
+        widget=forms.CheckboxInput(attrs={'class': 'form-checkbox'}),
+    )
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -340,7 +345,16 @@ class TaskForm(forms.ModelForm):
         self.fields['date_type'].initial = _initial_date_type(self.instance)
 
     def clean(self):
-        return _clean_task_dates(super().clean())
+        cd = _clean_task_dates(super().clean())
+        if cd.get('budget_negotiable'):
+            # Negotiable wins even if a figure was also typed in — budget_type
+            # already has a 'quote_needed' choice for exactly this case, it
+            # just wasn't wired to anything until now.
+            cd['budget'] = None
+            cd['budget_type'] = 'quote_needed'
+        elif not cd.get('budget'):
+            self.add_error('budget', 'Enter a budget, or check "negotiable" if you’re not sure yet.')
+        return cd
 
     class Meta:
         model  = Task

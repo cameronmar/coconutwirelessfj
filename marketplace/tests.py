@@ -1225,6 +1225,91 @@ class TaskDateModelDisplayTests(TestCase):
         self.assertEqual(task.date_display, '01 Aug 2026 – 05 Aug 2026')
 
 
+class TaskBudgetFieldTests(TestCase):
+    """A client unsure of their budget can check "negotiable" instead of
+    being forced to type a figure — see TaskForm.clean()."""
+
+    def _base_data(self, **overrides):
+        data = {
+            'title': 'Fix sink', 'category': 'plumbing', 'description': 'Leaking',
+            'town': 'Suva', 'urgency': 'this_week',
+        }
+        data.update(overrides)
+        return data
+
+    def test_budget_required_when_not_negotiable(self):
+        from .forms import TaskForm
+        form = TaskForm(data=self._base_data())
+        self.assertFalse(form.is_valid())
+        self.assertIn('budget', form.errors)
+
+    def test_explicit_budget_accepted(self):
+        from .forms import TaskForm
+        form = TaskForm(data=self._base_data(budget='220.00', budget_type='fixed'))
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertEqual(form.cleaned_data['budget'], Decimal('220.00'))
+        self.assertEqual(form.cleaned_data['budget_type'], 'fixed')
+
+    def test_negotiable_checkbox_clears_budget(self):
+        from .forms import TaskForm
+        form = TaskForm(data=self._base_data(budget_negotiable='on'))
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertIsNone(form.cleaned_data['budget'])
+        self.assertEqual(form.cleaned_data['budget_type'], 'quote_needed')
+
+    def test_negotiable_wins_even_if_a_figure_was_also_typed(self):
+        from .forms import TaskForm
+        form = TaskForm(data=self._base_data(budget='220.00', budget_negotiable='on'))
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertIsNone(form.cleaned_data['budget'])
+        self.assertEqual(form.cleaned_data['budget_type'], 'quote_needed')
+
+
+class TaskBudgetPostViewTests(TestCase):
+    def setUp(self):
+        self.client_user = User.objects.create_user(
+            email='budgetpost-client@example.com', password='pass12345',
+            first_name='Client', last_name='User', role=User.ROLE_CLIENT, town='Suva',
+        )
+
+    def test_posting_a_negotiable_task_succeeds_with_no_budget(self):
+        self.client.login(username=self.client_user.email, password='pass12345')
+        response = self.client.post(
+            reverse('post_task'),
+            {
+                'title': 'Fix sink', 'category': 'plumbing', 'description': 'Leaking',
+                'town': 'Suva', 'urgency': 'this_week', 'budget_negotiable': 'on',
+            },
+            secure=True,
+        )
+        self.assertEqual(response.status_code, 302)
+        task = Task.objects.get(title='Fix sink')
+        self.assertIsNone(task.budget)
+        self.assertEqual(task.budget_type, 'quote_needed')
+
+
+class TaskBudgetDisplayTests(TestCase):
+    def setUp(self):
+        self.client_user = User.objects.create_user(
+            email='budgetdisp-client@example.com', password='pass12345',
+            first_name='Client', last_name='User', role=User.ROLE_CLIENT, town='Suva',
+        )
+
+    def test_explicit_budget_displayed(self):
+        task = Task.objects.create(
+            client=self.client_user, title='Fix sink', category='plumbing',
+            description='Leak', budget=Decimal('150.00'), town='Suva',
+        )
+        self.assertEqual(task.budget_display, 'FJD $150.00')
+
+    def test_negotiable_budget_displayed(self):
+        task = Task.objects.create(
+            client=self.client_user, title='Fix sink', category='plumbing',
+            description='Leak', budget=None, budget_type='quote_needed', town='Suva',
+        )
+        self.assertEqual(task.budget_display, 'Negotiable')
+
+
 class EditTaskDatesTests(TestCase):
     def setUp(self):
         from datetime import date

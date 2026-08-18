@@ -170,7 +170,7 @@ footer{display:none;}
       </div>
       <div class="job-right">
         <span class="chip chip-open">Open</span>
-        <span class="fw-bold text-blue">FJD ${{ t.budget }}</span>
+        <span class="fw-bold text-blue">{{ t.budget_display }}</span>
         <a href="{% url 'task_detail' t.pk %}" class="btn btn-sm" style="background:#f0f5f8;color:var(--blue);">View</a>
       </div>
     </div>
@@ -183,7 +183,7 @@ footer{display:none;}
       </div>
       <div class="job-right">
         <span class="chip chip-assigned">Assigned</span>
-        <span class="fw-bold text-blue">FJD ${{ t.budget }}</span>
+        <span class="fw-bold text-blue">{{ t.budget_display }}</span>
         <a href="{% url 'task_detail' t.pk %}" class="btn btn-sm" style="background:#f0f5f8;color:var(--blue);">View</a>
       </div>
     </div>
@@ -236,7 +236,7 @@ footer{display:none;}
           <div class="job-title">{{ t.title }}</div>
           <div class="job-meta"><span>📍 {{ t.town }}</span><span>Posted {{ t.created_at|timesince }} ago</span><span>{{ t.quote_count }} quote{{ t.quote_count|pluralize }}</span></div>
         </div>
-        <div class="fw-bold text-blue" style="font-size:1.1rem;white-space:nowrap;">FJD ${{ t.budget }}</div>
+        <div class="fw-bold text-blue" style="font-size:1.1rem;white-space:nowrap;">{{ t.budget_display }}</div>
       </div>
     </a>
     {% endfor %}

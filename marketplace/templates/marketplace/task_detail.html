@@ -60,7 +60,7 @@
         <div class="meta-row">
           <span>{{ task.category_label }}</span>
           <span>📍 <strong>{{ task.town }}</strong></span>
-          <span>💰 <strong>FJD ${{ task.budget }}</strong></span>
+          <span>💰 <strong>{{ task.budget_display }}</strong></span>
           {% if task.preferred_date %}<span>📅 <strong>{{ task.date_display }}</strong></span>{% endif %}
           <span>🕐 Posted {{ task.created_at|timesince }} ago</span>
         </div>
@@ -361,7 +361,7 @@
         <div class="det-row"><span class="lbl">Also relevant to</span><span>{% for c in task.categories.all %}{{ c.icon }} {{ c.name }}{% if not forloop.last %}, {% endif %}{% endfor %}</span></div>
         {% endif %}
         <div class="det-row"><span class="lbl">Town</span><span>{{ task.town }}</span></div>
-        <div class="det-row"><span class="lbl">Budget</span><span class="fw-bold text-blue">FJD ${{ task.budget }}</span></div>
+        <div class="det-row"><span class="lbl">Budget</span><span class="fw-bold text-blue">{{ task.budget_display }}</span></div>
         <div class="det-row"><span class="lbl">Quotes</span><span>{{ task.quote_count }}</span></div>
         {% if task.materials_responsibility or task.meals_provided or task.parking_available_flag or task.site_access_available or task.tools_required or task.rubbish_removal_required or task.after_hours_required or task.on_site_inspection_required or task.delivery_required or task.clean_up_required or task.client_provide_photos or task.warranty_followup_requested %}
         <div class="det-row" style="flex-direction:column;align-items:flex-start;gap:8px;">

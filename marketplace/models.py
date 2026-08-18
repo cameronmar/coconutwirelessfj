@@ -353,7 +353,10 @@ class Task(models.Model):
     category        = models.CharField(max_length=20, blank=True, db_index=True)  # Slug into TradeCategory; see category_label
     categories      = models.ManyToManyField(TradeCategory, related_name='tasks', blank=True)  # New multi-category
     description     = models.TextField()
-    budget          = models.DecimalField(max_digits=10, decimal_places=2)
+    budget          = models.DecimalField(
+        max_digits=10, decimal_places=2, null=True, blank=True,
+        help_text='Blank means the client marked this negotiable — see budget_display / budget_type.',
+    )
     town            = models.CharField(max_length=50, choices=TOWN_CHOICES, db_index=True)
     preferred_date  = models.DateField(null=True, blank=True)
     preferred_date_end = models.DateField(
@@ -449,6 +452,16 @@ class Task(models.Model):
         if self.is_date_range:
             return f'{self.preferred_date:%d %b %Y} – {self.preferred_date_end:%d %b %Y}'
         return self.preferred_date
+
+    @property
+    def budget_display(self):
+        """'FJD $150.00', or 'Negotiable' when the client didn't set a
+        figure (TaskForm.clean() sets budget_type='quote_needed' in that
+        case). Never used for fee calculations — those are always based on
+        final_job_value / the accepted quote's price, never this field."""
+        if self.budget is None:
+            return 'Negotiable'
+        return f'FJD ${self.budget:.2f}'
 
     def has_quoting_appointments(self):
         return self.quoting_appointments.exists()

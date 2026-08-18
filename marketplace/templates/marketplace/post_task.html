@@ -99,6 +99,9 @@
         <div class="form-card">
           <h2>Budget (FJD $)</h2>
           <div class="field">
+            <label class="field-checkbox">{{ form.budget_negotiable }} {{ form.budget_negotiable.label }}</label>
+          </div>
+          <div class="field" id="budgetAmountField">
             {{ form.budget }}
             <div class="hint">Enter your budget in Fijian Dollars. Local pros will quote around this figure.</div>
             {% for e in form.budget.errors %}<div class="field-error">{{e}}</div>{% endfor %}
@@ -196,5 +199,16 @@ document.querySelectorAll('input[name="date_type"]').forEach(function(r){
   r.addEventListener('change', updateDateFields);
 });
 updateDateFields();
+
+function updateBudgetField(){
+  var checkbox = document.querySelector('input[name="budget_negotiable"]');
+  var amountField = document.getElementById('budgetAmountField');
+  amountField.style.display = (checkbox && checkbox.checked) ? 'none' : '';
+}
+var budgetNegotiableInput = document.querySelector('input[name="budget_negotiable"]');
+if(budgetNegotiableInput){
+  budgetNegotiableInput.addEventListener('change', updateBudgetField);
+}
+updateBudgetField();
 </script>
 {% endblock %}
