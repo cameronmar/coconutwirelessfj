@@ -8,7 +8,7 @@ from unittest import mock
 
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import DatabaseError
-from django.test import TestCase, override_settings
+from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone as django_timezone
 
@@ -35,6 +35,8 @@ from .utils import (
     calculate_market_take_home,
     calculate_platform_fee,
     create_platform_fee_for_task,
+    notify_message_recipient,
+    send_fcm_push,
     send_invoice_notifications,
 )
 
@@ -1827,3 +1829,185 @@ class TesterAdminActionTests(TestCase):
         model_admin.revoke_tester_access(request, User.objects.filter(pk=self.target.pk))
         self.target.refresh_from_db()
         self.assertFalse(self.target.is_tester)
+
+
+@override_settings(
+    STORAGES={
+        'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
+        'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
+    },
+)
+class FCMPushTests(TestCase):
+    """Re-verifies the Android push wiring end-to-end: the device-token
+    registration endpoint (used by both a fresh session and a remember-me
+    persistent one — the remember-me change only touches session expiry,
+    not auth/CSRF, but this confirms that directly), send_fcm_push's
+    best-effort behavior, and that a real notification event actually
+    reaches it."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email='pushuser@example.com', password='Password123',
+            first_name='Push', last_name='User', role=User.ROLE_CLIENT, town='Suva',
+        )
+
+    def _csrf_client(self):
+        c = Client(enforce_csrf_checks=True)
+        # Fetch the cookie while still anonymous — login_view redirects an
+        # already-authenticated GET straight to the dashboard without ever
+        # rendering {% csrf_token %}, so this has to happen before login().
+        c.get(reverse('login'), secure=True)
+        c.login(username='pushuser@example.com', password='Password123')
+        return c
+
+    def test_register_token_requires_login(self):
+        response = self.client.post(
+            reverse('register_fcm_token'), data='{"fcm_token": "abc"}', content_type='application/json', secure=True,
+        )
+        self.assertEqual(response.status_code, 302)  # redirected to login
+
+    def test_register_token_requires_post(self):
+        self.client.login(username='pushuser@example.com', password='Password123')
+        response = self.client.get(reverse('register_fcm_token'), secure=True)
+        self.assertEqual(response.status_code, 405)
+
+    def test_register_token_rejects_invalid_json(self):
+        self.client.login(username='pushuser@example.com', password='Password123')
+        response = self.client.post(
+            reverse('register_fcm_token'), data='not json', content_type='application/json', secure=True,
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json(), {'ok': False, 'error': 'invalid json'})
+
+    def test_register_token_saves_token_with_csrf_enforced(self):
+        # enforce_csrf_checks=True — same conditions the real Android
+        # WebView bridge JS operates under (X-CSRFToken header read from
+        # the csrftoken cookie), not the test client's usual CSRF bypass.
+        c = self._csrf_client()
+        csrf_token = c.cookies['csrftoken'].value
+        response = c.post(
+            reverse('register_fcm_token'),
+            data=json.dumps({'fcm_token': 'device-token-123'}),
+            content_type='application/json',
+            secure=True,
+            HTTP_X_CSRFTOKEN=csrf_token,
+            # Django's CSRF middleware additionally requires a same-origin
+            # Referer on HTTPS requests, on top of the token itself — a real
+            # browser/WebView sends this automatically, the test client
+            # doesn't unless told to.
+            HTTP_REFERER='https://testserver/',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {'ok': True})
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.fcm_token, 'device-token-123')
+
+    def test_register_token_without_csrf_header_is_rejected(self):
+        c = self._csrf_client()
+        response = c.post(
+            reverse('register_fcm_token'),
+            data=json.dumps({'fcm_token': 'should-not-save'}),
+            content_type='application/json',
+            secure=True,
+        )
+        self.assertEqual(response.status_code, 403)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.fcm_token, '')
+
+    def test_blank_token_does_not_overwrite_existing(self):
+        self.user.fcm_token = 'existing-token'
+        self.user.save(update_fields=['fcm_token'])
+        self.client.login(username='pushuser@example.com', password='Password123')
+        self.client.post(
+            reverse('register_fcm_token'), data=json.dumps({'fcm_token': ''}),
+            content_type='application/json', secure=True,
+        )
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.fcm_token, 'existing-token')
+
+    def test_remember_me_session_still_allows_token_registration(self):
+        """The actual concern behind 'this needs re-verifying now that
+        remember-me changes session behavior': does a persistent
+        (remember_me=True) session still authenticate this endpoint fine?
+        set_expiry(None) only changes the cookie's lifetime, not the
+        session's validity right now, so this should behave identically
+        to a normal login."""
+        response = self.client.post(
+            reverse('login'), {'email': self.user.email, 'password': 'Password123', 'remember_me': 'on'}, secure=True,
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(self.client.session.get_expire_at_browser_close())
+        token_response = self.client.post(
+            reverse('register_fcm_token'), data=json.dumps({'fcm_token': 'remember-me-token'}),
+            content_type='application/json', secure=True,
+        )
+        self.assertEqual(token_response.status_code, 200)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.fcm_token, 'remember-me-token')
+
+    def test_send_fcm_push_no_token_is_a_silent_noop(self):
+        self.assertEqual(self.user.fcm_token, '')
+        self.assertFalse(send_fcm_push(self.user, 'Title', 'Body'))
+
+    @override_settings(FIREBASE_CREDENTIALS_JSON='')
+    def test_send_fcm_push_no_credentials_is_a_silent_noop(self):
+        self.user.fcm_token = 'device-token'
+        self.user.save(update_fields=['fcm_token'])
+        self.assertFalse(send_fcm_push(self.user, 'Title', 'Body'))
+
+    @override_settings(FIREBASE_CREDENTIALS_JSON='{"type": "service_account", "project_id": "test"}')
+    def test_send_fcm_push_sends_when_configured(self):
+        self.user.fcm_token = 'device-token'
+        self.user.save(update_fields=['fcm_token'])
+        with mock.patch('firebase_admin._apps', {'[DEFAULT]': mock.Mock()}), \
+             mock.patch('firebase_admin.messaging.send') as mock_send:
+            mock_send.return_value = 'projects/test/messages/1'
+            result = send_fcm_push(self.user, 'New message', 'Hello there')
+        self.assertTrue(result)
+        mock_send.assert_called_once()
+        sent_message = mock_send.call_args[0][0]
+        self.assertEqual(sent_message.token, 'device-token')
+        self.assertEqual(sent_message.notification.title, 'New message')
+        self.assertEqual(sent_message.notification.body, 'Hello there')
+
+    @override_settings(FIREBASE_CREDENTIALS_JSON='{"type": "service_account", "project_id": "test"}')
+    def test_send_fcm_push_failure_does_not_raise(self):
+        self.user.fcm_token = 'device-token'
+        self.user.save(update_fields=['fcm_token'])
+        with mock.patch('firebase_admin._apps', {'[DEFAULT]': mock.Mock()}), \
+             mock.patch('firebase_admin.messaging.send', side_effect=Exception('FCM unreachable')):
+            result = send_fcm_push(self.user, 'Title', 'Body')  # must not raise
+        self.assertFalse(result)
+
+    @override_settings(FIREBASE_CREDENTIALS_JSON='{"type": "service_account", "project_id": "test"}')
+    def test_notify_message_recipient_reaches_fcm_push_end_to_end(self):
+        """The actual wiring a client cares about: register a device token
+        via the real endpoint, receive a message, confirm push fires with
+        that exact token — not just the two halves tested in isolation."""
+        self.client.login(username='pushuser@example.com', password='Password123')
+        self.client.post(
+            reverse('register_fcm_token'), data=json.dumps({'fcm_token': 'end-to-end-token'}),
+            content_type='application/json', secure=True,
+        )
+        sender = User.objects.create_user(
+            email='sender@example.com', password='Password123',
+            first_name='Sender', last_name='Person', role=User.ROLE_CLIENT, town='Suva',
+        )
+        task = Task.objects.create(
+            client=self.user, title='Fix sink', category='plumbing',
+            description='Kitchen sink leaking', budget=Decimal('150.00'), town='Suva',
+        )
+        # Refetch rather than reuse self.user — that in-memory instance still
+        # has fcm_token='' from setUp(); the HTTP call above updated the row,
+        # not this Python object, and Message.recipient would otherwise cache
+        # the stale one straight through to notify_message_recipient below.
+        recipient = User.objects.get(pk=self.user.pk)
+        message = Message.objects.create(task=task, sender=sender, recipient=recipient, body='When can you start?')
+
+        with mock.patch('firebase_admin._apps', {'[DEFAULT]': mock.Mock()}), \
+             mock.patch('firebase_admin.messaging.send') as mock_send:
+            mock_send.return_value = 'projects/test/messages/1'
+            notify_message_recipient(message)
+
+        mock_send.assert_called_once()
+        self.assertEqual(mock_send.call_args[0][0].token, 'end-to-end-token')
