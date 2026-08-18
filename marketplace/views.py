@@ -1350,6 +1350,41 @@ def conversation(request, tpk, opk):
     })
 
 
+@login_required
+@require_POST
+def edit_message(request, pk):
+    # Scoped to sender=request.user — only the author can edit their own
+    # message, not the recipient or anyone else on the thread.
+    message = get_object_or_404(Message, pk=pk, sender=request.user)
+    if message.deleted_at:
+        raise PermissionDenied
+    new_body = request.POST.get('body', '').strip()
+    if not new_body:
+        flash.error(request, "Message can't be empty.")
+    elif new_body != message.body:
+        # The prior version is archived, never overwritten away — same
+        # "keep the real record regardless of what either party did"
+        # rationale as the soft-delete below.
+        message.edit_history.append({'body': message.body, 'edited_at': timezone.now().isoformat()})
+        message.edited_at = timezone.now()
+        message.body = new_body
+        message.save(update_fields=['body', 'edited_at', 'edit_history'])
+    return redirect('conversation', tpk=message.task_id, opk=message.recipient_id)
+
+
+@login_required
+@require_POST
+def delete_message(request, pk):
+    message = get_object_or_404(Message, pk=pk, sender=request.user)
+    if not message.deleted_at:
+        # Soft delete only — body is left exactly as-is in the row. Only
+        # deleted_at changes, which is what the template checks to show
+        # "This message was deleted" instead of the real text.
+        message.deleted_at = timezone.now()
+        message.save(update_fields=['deleted_at'])
+    return redirect('conversation', tpk=message.task_id, opk=message.recipient_id)
+
+
 # ── Market (local professionals selling items/serves) ──────────────────────────
 
 def market_browse(request):
@@ -1984,3 +2019,32 @@ def supplier_enquiry_messages(request, pk):
         'chat_messages': messages_qs,
         'other': other,
     })
+
+
+@beta_feature('SUPPLIERS_ENABLED')
+@login_required
+@require_POST
+def edit_supplier_message(request, pk):
+    message = get_object_or_404(SupplierMessage, pk=pk, sender=request.user)
+    if message.deleted_at:
+        raise PermissionDenied
+    new_body = request.POST.get('body', '').strip()
+    if not new_body:
+        flash.error(request, "Message can't be empty.")
+    elif new_body != message.body:
+        message.edit_history.append({'body': message.body, 'edited_at': timezone.now().isoformat()})
+        message.edited_at = timezone.now()
+        message.body = new_body
+        message.save(update_fields=['body', 'edited_at', 'edit_history'])
+    return redirect('supplier_enquiry_messages', pk=message.enquiry_id)
+
+
+@beta_feature('SUPPLIERS_ENABLED')
+@login_required
+@require_POST
+def delete_supplier_message(request, pk):
+    message = get_object_or_404(SupplierMessage, pk=pk, sender=request.user)
+    if not message.deleted_at:
+        message.deleted_at = timezone.now()
+        message.save(update_fields=['deleted_at'])
+    return redirect('supplier_enquiry_messages', pk=message.enquiry_id)

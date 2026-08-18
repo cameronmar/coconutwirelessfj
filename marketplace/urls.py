@@ -55,10 +55,14 @@ urlpatterns = [
     path('enquiries/<int:pk>/quote/',                   views.submit_supplier_quote,      name='submit_supplier_quote'),
     path('enquiries/<int:enquiry_pk>/quotes/<int:quote_pk>/respond/', views.respond_to_quote, name='respond_to_quote'),
     path('enquiries/<int:pk>/messages/',                views.supplier_enquiry_messages,  name='supplier_enquiry_messages'),
+    path('enquiries/messages/<int:pk>/edit/',           views.edit_supplier_message,      name='edit_supplier_message'),
+    path('enquiries/messages/<int:pk>/delete/',         views.delete_supplier_message,    name='delete_supplier_message'),
     path('dashboard/supplier/',                         views.supplier_dashboard,         name='supplier_dashboard'),
     # Messages
     path('messages/',                        views.inbox,        name='inbox'),
     path('messages/<int:tpk>/<int:opk>/',    views.conversation, name='conversation'),
+    path('messages/message/<int:pk>/edit/',  views.edit_message, name='edit_message'),
+    path('messages/message/<int:pk>/delete/', views.delete_message, name='delete_message'),
     # Market
     path('market/',                          views.market_browse,          name='market_browse'),
     path('market/post/',                     views.create_market_listing,  name='create_market_listing'),

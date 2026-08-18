@@ -601,6 +601,15 @@ class Message(models.Model):
     read_at      = models.DateTimeField(null=True, blank=True)
     created_at   = models.DateTimeField(auto_now_add=True)
 
+    # Edit/delete are both soft — body is never actually cleared or dropped.
+    # deleted_at just flips how it renders (recipient sees "message was
+    # deleted", never the real text again); edit_history keeps every prior
+    # version. Both exist so a dispute/circumvention review always has the
+    # real record, regardless of what either party did on their end.
+    edited_at    = models.DateTimeField(null=True, blank=True)
+    deleted_at   = models.DateTimeField(null=True, blank=True)
+    edit_history = models.JSONField(default=list, blank=True)
+
     class Meta:
         ordering = ['created_at']
 
@@ -1496,6 +1505,12 @@ class SupplierMessage(models.Model):
     delivered_at = models.DateTimeField(null=True, blank=True)
     read_at      = models.DateTimeField(null=True, blank=True)
     created_at   = models.DateTimeField(auto_now_add=True)
+
+    # See Message.deleted_at / edit_history — same soft-edit/soft-delete
+    # rationale, kept consistent across both message types.
+    edited_at    = models.DateTimeField(null=True, blank=True)
+    deleted_at   = models.DateTimeField(null=True, blank=True)
+    edit_history = models.JSONField(default=list, blank=True)
 
     class Meta:
         ordering            = ['created_at']

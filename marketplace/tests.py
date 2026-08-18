@@ -26,6 +26,8 @@ from .models import (
     Quote,
     QuotingAppointment,
     QuotingAppointmentSlot,
+    SupplierEnquiry,
+    SupplierMessage,
     Task,
     TradieProfile,
     User,
@@ -2011,3 +2013,202 @@ class FCMPushTests(TestCase):
 
         mock_send.assert_called_once()
         self.assertEqual(mock_send.call_args[0][0].token, 'end-to-end-token')
+
+
+@override_settings(
+    STORAGES={
+        'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
+        'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
+    },
+)
+class MessageEditDeleteTests(TestCase):
+    """Both edit and delete are soft: body is never cleared, prior versions
+    are archived in edit_history — the point being a dispute/circumvention
+    review always has the real record, regardless of what either party did
+    on their end."""
+
+    def setUp(self):
+        self.sender = User.objects.create_user(
+            email='msgsender@example.com', password='Password123',
+            first_name='Sender', last_name='Person', role=User.ROLE_CLIENT, town='Suva',
+        )
+        self.recipient = User.objects.create_user(
+            email='msgrecipient@example.com', password='Password123',
+            first_name='Recipient', last_name='Person', role=User.ROLE_TRADIE, town='Suva',
+        )
+        self.stranger = User.objects.create_user(
+            email='msgstranger@example.com', password='Password123',
+            first_name='Stranger', last_name='Person', role=User.ROLE_CLIENT, town='Nadi',
+        )
+        self.task = Task.objects.create(
+            client=self.sender, title='Fix sink', category='plumbing',
+            description='Kitchen sink leaking', budget=Decimal('150.00'), town='Suva',
+        )
+        # A Quote is what makes self.recipient a legitimate party to this
+        # task's conversation (see _task_conversation_parties) — without
+        # one, conversation() 403s them even though they're the message's
+        # own recipient.
+        Quote.objects.create(task=self.task, tradie=self.recipient, price=Decimal('120.00'), message='Can do it', quote_includes='labour_only')
+        self.message = Message.objects.create(
+            task=self.task, sender=self.sender, recipient=self.recipient, body='Original text',
+        )
+
+    def test_sender_can_edit_their_own_message(self):
+        self.client.login(username=self.sender.email, password='Password123')
+        response = self.client.post(
+            reverse('edit_message', args=[self.message.pk]), {'body': 'Corrected text'}, secure=True,
+        )
+        self.assertEqual(response.status_code, 302)
+        self.message.refresh_from_db()
+        self.assertEqual(self.message.body, 'Corrected text')
+        self.assertIsNotNone(self.message.edited_at)
+        self.assertEqual(len(self.message.edit_history), 1)
+        self.assertEqual(self.message.edit_history[0]['body'], 'Original text')
+
+    def test_editing_to_the_same_text_does_not_add_a_history_entry(self):
+        self.client.login(username=self.sender.email, password='Password123')
+        self.client.post(reverse('edit_message', args=[self.message.pk]), {'body': 'Original text'}, secure=True)
+        self.message.refresh_from_db()
+        self.assertIsNone(self.message.edited_at)
+        self.assertEqual(self.message.edit_history, [])
+
+    def test_recipient_cannot_edit_a_message_sent_to_them(self):
+        self.client.login(username=self.recipient.email, password='Password123')
+        response = self.client.post(
+            reverse('edit_message', args=[self.message.pk]), {'body': 'hijacked'}, secure=True,
+        )
+        self.assertEqual(response.status_code, 404)  # get_object_or_404 scoped to sender=request.user
+        self.message.refresh_from_db()
+        self.assertEqual(self.message.body, 'Original text')
+
+    def test_stranger_cannot_edit_someone_elses_message(self):
+        self.client.login(username=self.stranger.email, password='Password123')
+        response = self.client.post(
+            reverse('edit_message', args=[self.message.pk]), {'body': 'hijacked'}, secure=True,
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_edit_rejects_empty_body(self):
+        self.client.login(username=self.sender.email, password='Password123')
+        self.client.post(reverse('edit_message', args=[self.message.pk]), {'body': '   '}, secure=True)
+        self.message.refresh_from_db()
+        self.assertEqual(self.message.body, 'Original text')
+
+    def test_sender_can_delete_their_own_message(self):
+        self.client.login(username=self.sender.email, password='Password123')
+        response = self.client.post(reverse('delete_message', args=[self.message.pk]), secure=True)
+        self.assertEqual(response.status_code, 302)
+        self.message.refresh_from_db()
+        self.assertIsNotNone(self.message.deleted_at)
+        # The actual point: body is untouched in the database — only the
+        # deleted_at flag changes. A dispute review can always see this.
+        self.assertEqual(self.message.body, 'Original text')
+
+    def test_recipient_cannot_delete_a_message_sent_to_them(self):
+        self.client.login(username=self.recipient.email, password='Password123')
+        response = self.client.post(reverse('delete_message', args=[self.message.pk]), secure=True)
+        self.assertEqual(response.status_code, 404)
+        self.message.refresh_from_db()
+        self.assertIsNone(self.message.deleted_at)
+
+    def test_cannot_edit_a_deleted_message(self):
+        self.message.deleted_at = django_timezone.now()
+        self.message.save(update_fields=['deleted_at'])
+        self.client.login(username=self.sender.email, password='Password123')
+        response = self.client.post(
+            reverse('edit_message', args=[self.message.pk]), {'body': 'sneaky edit'}, secure=True,
+        )
+        self.assertEqual(response.status_code, 403)
+        self.message.refresh_from_db()
+        self.assertEqual(self.message.body, 'Original text')
+
+    def test_deleting_twice_is_a_harmless_no_op(self):
+        self.client.login(username=self.sender.email, password='Password123')
+        self.client.post(reverse('delete_message', args=[self.message.pk]), secure=True)
+        self.message.refresh_from_db()
+        first_deleted_at = self.message.deleted_at
+        self.client.post(reverse('delete_message', args=[self.message.pk]), secure=True)
+        self.message.refresh_from_db()
+        self.assertEqual(self.message.deleted_at, first_deleted_at)  # not bumped to "now" again
+
+    @override_settings(
+        STORAGES={
+            'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
+            'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
+        },
+    )
+    def test_deleted_message_shows_placeholder_not_the_real_text(self):
+        self.message.deleted_at = django_timezone.now()
+        self.message.body = 'Something someone regretted sending'
+        self.message.save(update_fields=['deleted_at', 'body'])
+        self.client.login(username=self.recipient.email, password='Password123')
+        response = self.client.get(reverse('conversation', args=[self.task.pk, self.sender.pk]), secure=True)
+        self.assertContains(response, 'This message was deleted')
+        self.assertNotContains(response, 'Something someone regretted sending')
+
+
+@override_settings(SUPPLIERS_ENABLED=True)
+@override_settings(
+    STORAGES={
+        'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
+        'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
+    },
+)
+class SupplierMessageEditDeleteTests(TestCase):
+    """Same soft-edit/soft-delete contract as MessageEditDeleteTests, for
+    the supplier-enquiry messaging thread."""
+
+    def setUp(self):
+        self.client_user = User.objects.create_user(
+            email='enqclient@example.com', password='Password123',
+            first_name='Enq', last_name='Client', role=User.ROLE_CLIENT, town='Suva',
+        )
+        self.supplier_user = User.objects.create_user(
+            email='enqsupplier@example.com', password='Password123',
+            first_name='Enq', last_name='Supplier', role=User.ROLE_SUPPLIER, town='Suva',
+        )
+        self.enquiry = SupplierEnquiry.objects.create(
+            client=self.client_user, supplier=self.supplier_user,
+            title='Need cement', description='50 bags', town='Suva',
+        )
+        self.message = SupplierMessage.objects.create(
+            enquiry=self.enquiry, sender=self.client_user, recipient=self.supplier_user, body='Original text',
+        )
+
+    def test_sender_can_edit_their_own_message(self):
+        self.client.login(username=self.client_user.email, password='Password123')
+        response = self.client.post(
+            reverse('edit_supplier_message', args=[self.message.pk]), {'body': 'Corrected text'}, secure=True,
+        )
+        self.assertEqual(response.status_code, 302)
+        self.message.refresh_from_db()
+        self.assertEqual(self.message.body, 'Corrected text')
+        self.assertEqual(self.message.edit_history[0]['body'], 'Original text')
+
+    def test_recipient_cannot_edit_or_delete(self):
+        self.client.login(username=self.supplier_user.email, password='Password123')
+        edit_resp = self.client.post(
+            reverse('edit_supplier_message', args=[self.message.pk]), {'body': 'hijacked'}, secure=True,
+        )
+        delete_resp = self.client.post(reverse('delete_supplier_message', args=[self.message.pk]), secure=True)
+        self.assertEqual(edit_resp.status_code, 404)
+        self.assertEqual(delete_resp.status_code, 404)
+        self.message.refresh_from_db()
+        self.assertEqual(self.message.body, 'Original text')
+        self.assertIsNone(self.message.deleted_at)
+
+    def test_sender_can_delete_their_own_message(self):
+        self.client.login(username=self.client_user.email, password='Password123')
+        response = self.client.post(reverse('delete_supplier_message', args=[self.message.pk]), secure=True)
+        self.assertEqual(response.status_code, 302)
+        self.message.refresh_from_db()
+        self.assertIsNotNone(self.message.deleted_at)
+        self.assertEqual(self.message.body, 'Original text')
+
+    def test_edit_delete_views_stay_gated_behind_suppliers_enabled(self):
+        with override_settings(SUPPLIERS_ENABLED=False):
+            self.client.login(username=self.client_user.email, password='Password123')
+            response = self.client.post(
+                reverse('edit_supplier_message', args=[self.message.pk]), {'body': 'x'}, secure=True,
+            )
+        self.assertEqual(response.status_code, 404)

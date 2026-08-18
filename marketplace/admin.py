@@ -482,10 +482,16 @@ class QuotingAppointmentSlotAdmin(admin.ModelAdmin):
 
 @admin.register(Message)
 class MessageAdmin(admin.ModelAdmin):
-    list_display  = ['task', 'sender', 'recipient', 'created_at']
+    # edited_at/deleted_at/edit_history readonly here on purpose — this is
+    # the dispute/circumvention-review record, not something to hand-edit.
+    # body is deliberately never cleared by a "delete", so it's always the
+    # real text even when a user sees "This message was deleted".
+    list_display  = ['task', 'sender', 'recipient', 'created_at', 'edited_at', 'deleted_at']
+    list_filter   = ['deleted_at']
     list_select_related = ['task', 'sender', 'recipient']
     search_fields = ['sender__email', 'recipient__email', 'body']
     raw_id_fields = ['task', 'sender', 'recipient']
+    readonly_fields = ['edited_at', 'deleted_at', 'edit_history']
     date_hierarchy = 'created_at'
 
 
@@ -1254,6 +1260,8 @@ class SupplierQuoteAdmin(admin.ModelAdmin):
 
 @admin.register(SupplierMessage)
 class SupplierMessageAdmin(admin.ModelAdmin):
-    list_display = ('enquiry', 'sender', 'recipient', 'created_at')
+    list_display = ('enquiry', 'sender', 'recipient', 'created_at', 'edited_at', 'deleted_at')
+    list_filter = ('deleted_at',)
     raw_id_fields = ('sender', 'recipient', 'enquiry')
+    readonly_fields = ('edited_at', 'deleted_at', 'edit_history')
 

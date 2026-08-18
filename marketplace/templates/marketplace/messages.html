@@ -41,6 +41,19 @@ body,html{height:100%;}
 .msg-status{font-size:.68rem;color:var(--muted);margin-top:1px;text-align:right;}
 .msg-status.read{color:var(--blue);font-weight:600;}
 .date-div{text-align:center;font-size:.73rem;color:var(--muted);margin:5px 0;}
+.bubble.deleted{background:transparent!important;box-shadow:none!important;border:1px dashed #cce4ef;color:var(--muted)!important;font-style:italic;}
+.msg-edited{font-size:.68rem;color:var(--muted);margin-top:1px;}
+.msg.out .msg-edited{text-align:right;}
+.msg-actions{display:flex;gap:8px;margin-top:2px;}
+.msg.out .msg-actions{justify-content:flex-end;}
+.msg-action-btn{background:none;border:none;padding:0;font-size:.7rem;color:var(--muted);cursor:pointer;text-decoration:underline;}
+.msg-action-btn:hover{color:var(--blue);}
+.edit-form{margin-top:4px;}
+.edit-form textarea{width:100%;padding:7px 10px;border-radius:9px;border:1.5px solid #cce4ef;font-size:.85rem;font-family:inherit;resize:vertical;min-height:44px;}
+.edit-actions{display:flex;gap:8px;margin-top:5px;}
+.edit-actions button{font-size:.75rem;padding:4px 12px;border-radius:8px;border:none;cursor:pointer;}
+.edit-actions .save-btn{background:var(--blue);color:var(--white);font-weight:600;}
+.edit-actions .cancel-btn{background:#eef5f8;color:var(--muted);}
 /* Input */
 .chat-input{padding:12px 14px;background:var(--white);border-top:1px solid #dde8ef;display:flex;gap:9px;align-items:flex-end;flex-shrink:0;}
 .chat-input textarea{flex:1;padding:9px 13px;border-radius:11px;border:1.5px solid #cce4ef;font-size:.9rem;outline:none;resize:none;font-family:inherit;max-height:110px;}
@@ -71,7 +84,7 @@ footer{display:none;}
         <div class="ci-info">
           <div class="ci-name">{{ c.other.first_name }} {{ c.other.last_name }}<span class="ci-time">{{ c.last_msg.created_at|timesince }} ago</span></div>
           <div class="ci-task">{{ c.task.title|truncatechars:32 }}</div>
-          <div class="ci-prev">{{ c.last_msg.body|truncatechars:45 }}</div>
+          <div class="ci-prev">{% if c.last_msg.deleted_at %}<em>Message was deleted</em>{% else %}{{ c.last_msg.body|truncatechars:45 }}{% endif %}</div>
         </div>
       </a>
       {% empty %}
@@ -100,7 +113,22 @@ footer{display:none;}
           <div class="msg {% if msg.sender == user %}out{% else %}in{% endif %}">
             <div class="msg-av">{{ msg.sender.initials }}</div>
             <div>
-              <div class="bubble">{{ msg.body }}</div>
+              {% if msg.deleted_at %}
+                <div class="bubble deleted">This message was deleted</div>
+              {% else %}
+                <div class="bubble" id="bubble-{{ msg.pk }}">{{ msg.body }}</div>
+                {% if msg.edited_at %}<div class="msg-edited">(edited)</div>{% endif %}
+                {% if msg.sender == user %}
+                <form method="post" action="{% url 'edit_message' msg.pk %}" class="edit-form" id="edit-form-{{ msg.pk }}" style="display:none;" onsubmit="return guardSubmit(this);">
+                  {% csrf_token %}
+                  <textarea name="body">{{ msg.body }}</textarea>
+                  <div class="edit-actions">
+                    <button type="submit" class="save-btn">Save</button>
+                    <button type="button" class="cancel-btn" onclick="cancelEdit({{ msg.pk }})">Cancel</button>
+                  </div>
+                </form>
+                {% endif %}
+              {% endif %}
               <div class="msg-time">{{ msg.created_at|time:"H:i" }}</div>
               {% if msg.sender == user %}
                 {% if msg.read_at %}
@@ -109,6 +137,15 @@ footer{display:none;}
                   <div class="msg-status">Delivered {{ msg.delivered_at|time:"H:i" }}</div>
                 {% else %}
                   <div class="msg-status">Sent</div>
+                {% endif %}
+                {% if not msg.deleted_at %}
+                <div class="msg-actions">
+                  <button type="button" class="msg-action-btn" onclick="startEdit({{ msg.pk }})">Edit</button>
+                  <form method="post" action="{% url 'delete_message' msg.pk %}" style="display:contents;" onsubmit="return confirm('Delete this message? This can\'t be undone.') &amp;&amp; guardSubmit(this);">
+                    {% csrf_token %}
+                    <button type="submit" class="msg-action-btn">Delete</button>
+                  </form>
+                </div>
                 {% endif %}
               {% endif %}
             </div>
@@ -119,7 +156,7 @@ footer{display:none;}
       </div>
 
       <div class="chat-input">
-        <form method="post" action="{% url 'conversation' active_task.pk active_other.pk %}" style="display:contents;">
+        <form method="post" action="{% url 'conversation' active_task.pk active_other.pk %}" style="display:contents;" onsubmit="return guardSubmit(this);">
           {% csrf_token %}
           <textarea name="body" placeholder="Type a message…" rows="1" id="msgInput" onkeydown="handleKey(event,this)"></textarea>
           <button type="submit">Send →</button>
@@ -143,7 +180,11 @@ const cb = document.getElementById('chatBody');
 if(cb) cb.scrollTop = cb.scrollHeight;
 
 function handleKey(e, el){
-  if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();el.closest('form').submit();}
+  // requestSubmit() (not submit()) so this still fires the form's onsubmit
+  // handler below — plain submit() bypasses onsubmit entirely, which was
+  // part of why a slow connection let an impatient Enter + tap-the-button
+  // send the same message twice.
+  if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();el.closest('form').requestSubmit();}
   el.style.height='auto';
   el.style.height=Math.min(el.scrollHeight,110)+'px';
 }
@@ -151,6 +192,25 @@ function filterConvs(q){
   document.querySelectorAll('.ci').forEach(el=>{
     el.style.display=el.textContent.toLowerCase().includes(q.toLowerCase())?'':'none';
   });
+}
+// Guards every message form (compose, edit, delete) against a double
+// submit — disables the button on first submit and refuses any repeat
+// while that request is in flight. A fresh page load after the redirect
+// naturally resets this, so there's nothing to re-enable.
+function guardSubmit(form){
+  if (form.dataset.submitting === 'true') return false;
+  form.dataset.submitting = 'true';
+  var btn = form.querySelector('button[type=submit]');
+  if (btn) { btn.disabled = true; btn.textContent = btn.textContent === 'Send →' ? 'Sending…' : btn.textContent; }
+  return true;
+}
+function startEdit(pk){
+  document.getElementById('bubble-' + pk).style.display = 'none';
+  document.getElementById('edit-form-' + pk).style.display = 'block';
+}
+function cancelEdit(pk){
+  document.getElementById('bubble-' + pk).style.display = '';
+  document.getElementById('edit-form-' + pk).style.display = 'none';
 }
 </script>
 {% endblock %}
