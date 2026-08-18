@@ -2605,6 +2605,12 @@ class SupplierMessagePollTests(TestCase):
 # path and a way for users to report abuse — see the "would this pass a
 # Google Play review" sweep this branch of work came out of.
 
+@override_settings(
+    STORAGES={
+        'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
+        'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
+    }
+)
 class AccountDeletionTests(TestCase):
     def setUp(self):
         self.user = User.objects.create_user(
