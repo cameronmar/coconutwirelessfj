@@ -434,16 +434,31 @@ class TaskAdmin(admin.ModelAdmin):
 
 @admin.register(Quote)
 class QuoteAdmin(admin.ModelAdmin):
-    list_display  = ['task', 'tradie', 'customer_facing_quote', 'quote_includes', 'status', 'include_platform_fee', 'created_at']
+    list_display  = ['task', 'tradie', 'customer_facing_quote', 'applied_fee_summary', 'quote_includes', 'status', 'include_platform_fee', 'created_at']
     list_select_related = ['task', 'tradie']
     list_filter   = ['status', 'include_platform_fee', 'quote_includes', 'created_at']
     search_fields = ['task__title', 'tradie__email']
     raw_id_fields = ['task', 'tradie']
-    readonly_fields = ['created_at']
+    readonly_fields = ['created_at', 'applied_fee_summary']
     fieldsets = (
         ('Quote Assignment', {'fields': ('task', 'tradie')}),
         ('Quote Pricing', {'fields': ('minimum_take_home_amount', 'customer_facing_quote', 'price', 'include_platform_fee')}),
-        ('Fee Estimates', {'fields': ('estimated_platform_fee', 'estimated_provider_take_home', 'fee_rule_applied', 'success_fee_rate_at_quote_time', 'success_fee_cap_at_quote_time', 'large_job_threshold_at_quote_time', 'large_job_fee_rate_at_quote_time', 'client_quote_total', 'estimated_tradie_take_home')}),
+        ('Fee Applied', {
+            'fields': ('applied_fee_summary', 'estimated_provider_take_home', 'client_quote_total', 'estimated_tradie_take_home'),
+            'description': (
+                'This is what was actually charged on this quote — only one fee rule ever applies '
+                '(standard rate under the large-job threshold, or the large-job rate above it; never both). '
+                'See "Platform fee settings snapshot" below for the raw rate/threshold values this was computed from.'
+            ),
+        }),
+        ('Platform Fee Settings Snapshot (reference only)', {
+            'fields': ('fee_rule_applied', 'success_fee_rate_at_quote_time', 'success_fee_cap_at_quote_time', 'large_job_threshold_at_quote_time', 'large_job_fee_rate_at_quote_time'),
+            'classes': ('collapse',),
+            'description': (
+                'A record of what the platform\'s fee settings were at the moment this quote was submitted — '
+                'not two fees being charged. Only the rate named in "Fee rule applied" was used.'
+            ),
+        }),
         ('Discount', {'fields': ('used_founding_credit', 'promo_code', 'estimated_discount_amount')}),
         ('Job Details', {'fields': ('includes_materials', 'quote_includes', 'earliest_available_date', 'estimated_job_duration', 'warranty_or_followup_included')}),
         ('Message', {'fields': ('message',)}),
@@ -451,6 +466,13 @@ class QuoteAdmin(admin.ModelAdmin):
         ('Timestamps', {'fields': ('created_at',)}),
     )
     date_hierarchy = 'created_at'
+
+    def applied_fee_summary(self, obj):
+        if obj.estimated_platform_fee is None:
+            return '—'
+        rule = obj.fee_rule_applied or 'rule not recorded'
+        return f'FJD ${obj.estimated_platform_fee:.2f} ({rule})'
+    applied_fee_summary.short_description = 'Fee applied'
 
 
 # ── Quoting appointment ───────────────────────────────────────────────────────
