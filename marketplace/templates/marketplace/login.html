@@ -11,11 +11,14 @@ main{flex:1;display:flex;align-items:center;justify-content:center;padding:40px 
 .role-tabs{display:flex;background:#eef5f8;border-radius:12px;padding:4px;margin-bottom:22px;}
 .role-tab{flex:1;padding:9px;text-align:center;border-radius:9px;cursor:pointer;font-size:.9rem;color:var(--muted);font-weight:600;border:none;background:none;transition:all .2s;}
 .role-tab.active{background:var(--white);color:var(--blue);box-shadow:0 2px 8px rgba(0,80,120,.1);}
+.role-tab:disabled{cursor:default;opacity:.55;}
 .forgot{font-size:.82rem;color:var(--blue);text-decoration:none;}
 .divider{display:flex;align-items:center;gap:12px;margin:18px 0;color:var(--muted);font-size:.84rem;}
 .divider::before,.divider::after{content:'';flex:1;height:1px;background:#dde8ef;}
 .social-btn{width:100%;padding:11px;border:1.5px solid #cce4ef;border-radius:10px;background:var(--white);font-size:.92rem;cursor:pointer;margin-bottom:10px;transition:border-color .2s;}
 .social-btn:hover{border-color:var(--blue);}
+.check-row{display:flex;align-items:flex-start;gap:10px;margin-bottom:18px;font-size:.87rem;color:var(--muted);line-height:1.5;}
+.check-row input{margin-top:2px;accent-color:var(--blue);}
 </style>
 {% endblock %}
 
@@ -28,6 +31,11 @@ main{flex:1;display:flex;align-items:center;justify-content:center;padding:40px 
     <div class="role-tabs">
       <button class="role-tab active" id="tabClient" onclick="setRole('client')">🏠 Client</button>
       <button class="role-tab" id="tabTradie" onclick="setRole('tradie')">🔧 Local Professional</button>
+      {% if suppliers_visible %}
+      <button class="role-tab" id="tabSupplier" onclick="setRole('supplier')">📦 Supplier</button>
+      {% else %}
+      <button class="role-tab" disabled title="Coming soon">📦 Supplier (soon)</button>
+      {% endif %}
     </div>
 
     <div class="card">
@@ -46,6 +54,10 @@ main{flex:1;display:flex;align-items:center;justify-content:center;padding:40px 
           {{ form.password }}
           {% for err in form.password.errors %}<div class="field-error">{{ err }}</div>{% endfor %}
         </div>
+        <div class="check-row">
+          {{ form.remember_me }}
+          <span>Keep me logged in — recommended if you want message notifications to work reliably in the app</span>
+        </div>
         {% if form.non_field_errors %}
           <div class="field-error" style="margin-bottom:12px;">{{ form.non_field_errors }}</div>
         {% endif %}
@@ -61,11 +73,14 @@ main{flex:1;display:flex;align-items:center;justify-content:center;padding:40px 
 {% block scripts %}
 <script>
 let role='client';
+const roleLabels = {client: 'Client', tradie: 'Local Professional', supplier: 'Supplier'};
+const roleTabIds = {client: 'tabClient', tradie: 'tabTradie', supplier: 'tabSupplier'};
 function setRole(r){
   role=r;
   document.querySelectorAll('.role-tab').forEach(t=>t.classList.remove('active'));
-  document.getElementById(r==='client'?'tabClient':'tabTradie').classList.add('active');
-  document.getElementById('loginBtn').textContent='Log in as '+(r==='client'?'Client':'Local Professional');
+  const tab = document.getElementById(roleTabIds[r]);
+  if (tab) tab.classList.add('active');
+  document.getElementById('loginBtn').textContent='Log in as '+roleLabels[r];
 }
 </script>
 {% endblock %}

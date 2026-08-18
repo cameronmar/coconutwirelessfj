@@ -76,6 +76,13 @@ class User(AbstractUser):
         verbose_name='Market founding seller credit balance (FJD)',
     )
 
+    # Beta/tester access — admin-granted, independent of role (a tester is
+    # still a client/tradie/supplier account; this just lets them preview
+    # features gated behind a not-yet-launched flag, e.g. SUPPLIERS_ENABLED).
+    # Not part of ROLE_CHOICES since it's an orthogonal capability, not an
+    # account type.
+    is_tester = models.BooleanField(default=False, verbose_name='Beta tester (can preview unlaunched features)')
+
     USERNAME_FIELD  = 'email'
     REQUIRED_FIELDS = []
 
@@ -93,6 +100,9 @@ class User(AbstractUser):
     def initials(self):
         parts = [self.first_name[:1], self.last_name[:1]]
         return ''.join(p for p in parts if p).upper() or '?'
+
+    def can_preview_unlaunched_features(self):
+        return self.is_staff or self.is_tester
 
 
 # ── Tradie profile ────────────────────────────────────────────────────────────

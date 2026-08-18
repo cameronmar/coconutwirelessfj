@@ -21,6 +21,9 @@
 .pc-rating{font-size:.85rem;font-weight:700;color:var(--blue);}
 .pc-rating .count{font-size:.76rem;color:var(--muted);font-weight:400;}
 .empty{text-align:center;padding:50px 20px;color:var(--muted);}
+.become-cta{margin-top:16px;padding:12px 16px;background:var(--blue-light);border-radius:10px;font-size:.87rem;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;}
+.become-cta a{color:var(--blue);font-weight:700;text-decoration:none;}
+.become-cta a:hover{text-decoration:underline;}
 </style>
 {% endblock %}
 
@@ -45,6 +48,12 @@
       </select>
       <button type="submit">Search</button>
     </form>
+    {% if not user.is_authenticated or user.role != 'supplier' %}
+    <div class="become-cta">
+      <span>Supply building materials, food, tools, or other goods to clients across Fiji?</span>
+      <a href="{% url 'register_supplier' %}">Become a supplier →</a>
+    </div>
+    {% endif %}
   </div>
 </div>
 

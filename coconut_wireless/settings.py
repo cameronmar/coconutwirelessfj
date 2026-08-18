@@ -98,6 +98,7 @@ TEMPLATES = [
                 'django.contrib.auth.context_processors.auth',
                 'django.contrib.messages.context_processors.messages',
                 'django.template.context_processors.media',
+                'marketplace.context_processors.beta_features',
             ],
         },
     },
@@ -244,6 +245,13 @@ ADMIN_EMAIL = os.environ.get('ADMIN_EMAIL', '').strip()
 # notifications without crashing the app — all push sends are best-effort and
 # silently skipped when this isn't configured.
 FIREBASE_CREDENTIALS_JSON = os.environ.get('FIREBASE_CREDENTIALS_JSON', '').strip()
+
+# ── Unlaunched-feature gates ───────────────────────────────────────────────────
+# Off by default in every environment, including production, until explicitly
+# turned on — not just a DEBUG-only gate. Staff and users with
+# User.is_tester=True can preview a gated feature regardless of this flag (see
+# marketplace.views._beta_feature and User.can_preview_unlaunched_features()).
+SUPPLIERS_ENABLED = _get_bool_env('SUPPLIERS_ENABLED', False)
 
 # ── Observability (optional) ──────────────────────────────────────────────────
 SENTRY_DSN = os.environ.get('SENTRY_DSN', '').strip()

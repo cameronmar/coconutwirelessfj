@@ -19,7 +19,11 @@
     <nav id="mainNav">
       <a href="{% url 'browse_tasks' %}">Browse Tasks</a>
       <a href="{% url 'browse_tradies' %}">Find a Local Professional</a>
-      <a href="{% url 'browse_suppliers' %}">Find a Supplier</a>
+      {% if suppliers_visible %}
+        <a href="{% url 'browse_suppliers' %}">Find a Supplier</a>
+      {% else %}
+        <span class="nav-coming-soon" title="Coming soon">Find a Supplier (coming soon)</span>
+      {% endif %}
       <a href="{% url 'market_browse' %}">Market</a>
       {% if user.is_authenticated %}
         {% if user.role == 'client' or user.role == 'tradie' %}
@@ -27,7 +31,7 @@
         {% endif %}
         <a href="{% url 'inbox' %}">Messages</a>
         <a href="{% url 'dashboard' %}">Dashboard</a>
-        {% if user.role == 'supplier' %}
+        {% if user.role == 'supplier' and suppliers_visible %}
           <a href="{% url 'supplier_dashboard' %}">Supplier Dashboard</a>
         {% endif %}
         <a href="{% url 'logout' %}" class="btn-nav-outline">Log Out</a>
@@ -35,7 +39,11 @@
         <a href="{% url 'how_it_works' %}">How It Works</a>
         <a href="{% url 'login' %}" class="btn-nav-outline">Log In</a>
         <a href="{% url 'register_client' %}" class="btn-nav-solid">Sign Up</a>
-        <a href="{% url 'register_supplier' %}" class="btn-nav-outline">Supplier Sign Up</a>
+        {% if suppliers_visible %}
+          <a href="{% url 'register_supplier' %}" class="btn-nav-outline">Supplier Sign Up</a>
+        {% else %}
+          <span class="nav-coming-soon" title="Coming soon">Supplier Sign Up (coming soon)</span>
+        {% endif %}
       {% endif %}
     </nav>
   </div>

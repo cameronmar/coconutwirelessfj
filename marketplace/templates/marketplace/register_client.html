@@ -14,6 +14,8 @@ main{display:flex;align-items:center;justify-content:center;padding:36px 20px;mi
 .type-btn p{margin:0;font-size:.8rem;color:var(--muted);}
 .type-btn.active{border-color:var(--blue);background:var(--blue-light);}
 .type-btn.active h4{color:var(--blue);}
+.type-btn.disabled{cursor:default;opacity:.55;}
+.type-btn.disabled:hover{border-color:#cce4ef;}
 .check-row{display:flex;align-items:flex-start;gap:10px;margin-bottom:18px;font-size:.87rem;color:var(--muted);line-height:1.5;}
 .check-row input{margin-top:2px;accent-color:var(--blue);}
 .check-row a{color:var(--blue);text-decoration:none;}
@@ -43,6 +45,17 @@ main{display:flex;align-items:center;justify-content:center;padding:36px 20px;mi
         <h4>🔧 I'm a Local Professional</h4>
         <p>Find work and grow my business</p>
       </a>
+      {% if suppliers_visible %}
+      <a href="{% url 'register_supplier' %}" class="type-btn" style="text-decoration:none;">
+        <h4>📦 I'm a Supplier</h4>
+        <p>Supply goods or materials to clients</p>
+      </a>
+      {% else %}
+      <div class="type-btn disabled" title="Coming soon">
+        <h4>📦 I'm a Supplier</h4>
+        <p>Coming soon</p>
+      </div>
+      {% endif %}
     </div>
 
     <div class="card">

@@ -85,12 +85,14 @@ class HasAcceptedTermsFilter(admin.SimpleListFilter):
 @admin.register(User)
 class UserAdmin(BaseUserAdmin):
     ordering = ['email']
-    list_display = ['email', 'first_name', 'last_name', 'role', 'town', 'is_market_founding_member', 'is_active', 'date_joined', 'accepted_terms_display', 'migrate_link']
-    list_filter  = ['role', 'town', 'is_market_founding_member', 'is_active', HasAcceptedTermsFilter]
+    list_display = ['email', 'first_name', 'last_name', 'role', 'town', 'is_tester', 'is_market_founding_member', 'is_active', 'date_joined', 'accepted_terms_display', 'migrate_link']
+    list_filter  = ['role', 'town', 'is_tester', 'is_market_founding_member', 'is_active', HasAcceptedTermsFilter]
     search_fields = ['email', 'first_name', 'last_name']
+    actions = ['grant_tester_access', 'revoke_tester_access']
     fieldsets = (
         (None,           {'fields': ('email', 'password')}),
         ('Personal',     {'fields': ('first_name', 'last_name', 'mobile', 'town', 'role')}),
+        ('Beta Access',  {'fields': ('is_tester',), 'description': 'Testers can preview features gated behind an unlaunched-feature flag (e.g. supplier accounts) before general availability.'}),
         ('Market Founding Seller', {'fields': ('is_market_founding_member', 'market_founding_credit_balance')}),
         ('Permissions',  {'fields': ('is_active', 'is_staff', 'is_superuser', 'groups', 'user_permissions')}),
         ('Dates',        {'fields': ('last_login', 'date_joined')}),
@@ -101,6 +103,16 @@ class UserAdmin(BaseUserAdmin):
             'fields': ('email', 'first_name', 'last_name', 'role', 'town', 'mobile', 'password1', 'password2'),
         }),
     )
+
+    @admin.action(description='Grant tester access (can preview unlaunched features)')
+    def grant_tester_access(self, request, queryset):
+        updated = queryset.update(is_tester=True)
+        messages.success(request, f'Granted tester access to {updated} user(s).')
+
+    @admin.action(description='Revoke tester access')
+    def revoke_tester_access(self, request, queryset):
+        updated = queryset.update(is_tester=False)
+        messages.success(request, f'Revoked tester access from {updated} user(s).')
 
     def get_queryset(self, request):
         # migrate_link()'s hasattr(obj, 'tradie_profile') check would

@@ -1695,3 +1695,135 @@ class TermsAcceptanceReportTests(TestCase):
         model_admin = UserAdmin(User, site)
         changelist = model_admin.get_changelist_instance(request)
         self.assertEqual(set(changelist.get_queryset(request).values_list('pk', flat=True)), {self.without_terms.pk})
+
+
+@override_settings(
+    SUPPLIERS_ENABLED=False,
+    STORAGES={
+        'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
+        'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
+    },
+)
+class BetaFeatureGatingTests(TestCase):
+    """The tester/coming-soon gate: SUPPLIERS_ENABLED off by default, staff
+    and User.is_tester=True bypass it, everyone else gets a 404 (matching
+    the existing FACEBOOK_LOGIN_ENABLED-style flags — a gated URL should
+    look like it doesn't exist, not like a locked door)."""
+
+    def setUp(self):
+        self.anon_urls = [
+            reverse('browse_suppliers'),
+            reverse('register_supplier'),
+        ]
+        self.regular_user = User.objects.create_user(
+            email='regular@example.com', password='Password123',
+            first_name='Regular', last_name='User', role=User.ROLE_CLIENT, town='Suva',
+        )
+        self.tester_user = User.objects.create_user(
+            email='tester@example.com', password='Password123',
+            first_name='Test', last_name='Er', role=User.ROLE_CLIENT, town='Suva', is_tester=True,
+        )
+        self.staff_user = User.objects.create_user(
+            email='staff@example.com', password='Password123',
+            first_name='Staff', last_name='Member', is_staff=True, town='Suva',
+        )
+
+    def test_anonymous_visitor_gets_404_on_gated_urls(self):
+        for url in self.anon_urls:
+            response = self.client.get(url, secure=True)
+            self.assertEqual(response.status_code, 404, url)
+
+    def test_regular_authenticated_user_gets_404(self):
+        self.client.login(username='regular@example.com', password='Password123')
+        response = self.client.get(reverse('browse_suppliers'), secure=True)
+        self.assertEqual(response.status_code, 404)
+
+    def test_tester_user_bypasses_the_gate(self):
+        self.client.login(username='tester@example.com', password='Password123')
+        response = self.client.get(reverse('browse_suppliers'), secure=True)
+        self.assertEqual(response.status_code, 200)
+
+    def test_staff_user_bypasses_the_gate(self):
+        self.client.login(username='staff@example.com', password='Password123')
+        response = self.client.get(reverse('browse_suppliers'), secure=True)
+        self.assertEqual(response.status_code, 200)
+
+    @override_settings(SUPPLIERS_ENABLED=True)
+    def test_flag_on_opens_it_for_everyone(self):
+        response = self.client.get(reverse('browse_suppliers'), secure=True)
+        self.assertEqual(response.status_code, 200)
+
+    def test_own_supplier_dashboard_is_gated_for_a_non_tester_supplier(self):
+        """A supplier account that predates the beta gate (or was never
+        flagged as a tester) is locked out of its own dashboard while the
+        flag is off — the gate is on the viewer, not on whether a supplier
+        profile happens to exist."""
+        supplier = User.objects.create_user(
+            email='supplier@example.com', password='Password123',
+            first_name='Sup', last_name='Plier', role=User.ROLE_SUPPLIER, town='Suva',
+        )
+        self.client.login(username='supplier@example.com', password='Password123')
+        response = self.client.get(reverse('supplier_dashboard'), secure=True)
+        self.assertEqual(response.status_code, 404)
+
+    def test_nav_shows_coming_soon_for_regular_visitor(self):
+        response = self.client.get(reverse('home'), secure=True)
+        self.assertContains(response, 'coming soon')
+        self.assertNotContains(response, reverse('browse_suppliers'))
+
+    def test_nav_shows_live_link_for_tester(self):
+        self.client.login(username='tester@example.com', password='Password123')
+        response = self.client.get(reverse('home'), secure=True)
+        self.assertContains(response, reverse('browse_suppliers'))
+
+    def test_register_client_type_toggle_hides_supplier_option_by_default(self):
+        response = self.client.get(reverse('register_client'), secure=True)
+        self.assertNotContains(response, reverse('register_supplier'))
+        self.assertContains(response, 'Coming soon')
+
+    def test_login_page_supplier_tab_disabled_by_default(self):
+        response = self.client.get(reverse('login'), secure=True)
+        self.assertContains(response, 'disabled')
+        self.assertContains(response, 'Supplier (soon)')
+
+
+class TesterAdminActionTests(TestCase):
+    def setUp(self):
+        self.admin_user = User.objects.create_superuser(email='super@example.com', password='Password123')
+        self.target = User.objects.create_user(
+            email='target@example.com', password='Password123',
+            first_name='Target', last_name='User', role=User.ROLE_CLIENT, town='Suva',
+        )
+
+    def test_grant_tester_access_action(self):
+        from marketplace.admin import UserAdmin
+        from django.contrib.admin.sites import site
+        from django.test import RequestFactory
+        from django.contrib.messages.storage.fallback import FallbackStorage
+
+        request = RequestFactory().post('/admin/marketplace/user/')
+        request.user = self.admin_user
+        setattr(request, 'session', {})
+        setattr(request, '_messages', FallbackStorage(request))
+        model_admin = UserAdmin(User, site)
+        model_admin.grant_tester_access(request, User.objects.filter(pk=self.target.pk))
+        self.target.refresh_from_db()
+        self.assertTrue(self.target.is_tester)
+
+    def test_revoke_tester_access_action(self):
+        from marketplace.admin import UserAdmin
+        from django.contrib.admin.sites import site
+        from django.test import RequestFactory
+        from django.contrib.messages.storage.fallback import FallbackStorage
+
+        self.target.is_tester = True
+        self.target.save(update_fields=['is_tester'])
+
+        request = RequestFactory().post('/admin/marketplace/user/')
+        request.user = self.admin_user
+        setattr(request, 'session', {})
+        setattr(request, '_messages', FallbackStorage(request))
+        model_admin = UserAdmin(User, site)
+        model_admin.revoke_tester_access(request, User.objects.filter(pk=self.target.pk))
+        self.target.refresh_from_db()
+        self.assertFalse(self.target.is_tester)

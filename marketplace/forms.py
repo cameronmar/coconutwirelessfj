@@ -227,8 +227,9 @@ class ServiceAreaForm(forms.ModelForm):
 
 
 class LoginForm(forms.Form):
-    email    = forms.EmailField(widget=_input('you@example.fj', type_='email'))
-    password = forms.CharField(widget=forms.PasswordInput(attrs={'class': 'form-input', 'placeholder': 'Your password'}))
+    email       = forms.EmailField(widget=_input('you@example.fj', type_='email'))
+    password    = forms.CharField(widget=forms.PasswordInput(attrs={'class': 'form-input', 'placeholder': 'Your password'}))
+    remember_me = forms.BooleanField(required=False, label='Keep me logged in')
 
 
 class PasswordResetRequestForm(forms.Form):

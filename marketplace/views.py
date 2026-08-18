@@ -9,6 +9,7 @@ from django.contrib import messages as flash
 from django.contrib.auth import authenticate, login, logout
 from datetime import datetime
 from decimal import Decimal
+from functools import wraps
 from django.conf import settings
 from django.contrib.auth.decorators import login_required
 from django.views.decorators.http import require_POST
@@ -16,7 +17,7 @@ from django.core.exceptions import PermissionDenied
 from django.core.paginator import Paginator
 from django.db import DatabaseError, connection, transaction
 from django.db.models import Avg, Count, F, Q
-from django.http import JsonResponse
+from django.http import Http404, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
@@ -133,6 +134,27 @@ def _rate_limited(request, key_prefix, max_attempts, window_seconds):
 def _require_role(request, role):
     if not request.user.is_authenticated or request.user.role != role:
         raise PermissionDenied
+
+
+def beta_feature(flag_name):
+    """
+    Gate a view behind a not-yet-launched settings flag, with a bypass for
+    staff and users flagged User.is_tester=True — the "let testers preview
+    unlaunched features" mechanism. 404s rather than redirecting, matching
+    the existing FACEBOOK_LOGIN_ENABLED-style flags elsewhere in this file:
+    a gated URL should look like it doesn't exist yet to anyone who isn't
+    allowed to see it, not like a locked door.
+    """
+    def decorator(view_func):
+        @wraps(view_func)
+        def wrapped(request, *args, **kwargs):
+            if getattr(settings, flag_name) or (
+                request.user.is_authenticated and request.user.can_preview_unlaunched_features()
+            ):
+                return view_func(request, *args, **kwargs)
+            raise Http404
+        return wrapped
+    return decorator
 
 
 def _require_task_poster(request):
@@ -397,6 +419,13 @@ def login_view(request):
         user = authenticate(request, username=cd['email'], password=cd['password'])
         if user:
             login(request, user)
+            # Unchecked -> session cookie, gone when the browser/app closes.
+            # Checked -> persists for SESSION_COOKIE_AGE (Django default: 2
+            # weeks), which is what keeps the Android WebView app's session
+            # alive long enough to matter for message push notifications —
+            # FCM delivery itself doesn't need a live session, but re-opening
+            # the app to read/reply to what the notification was about does.
+            request.session.set_expiry(0 if not cd.get('remember_me') else None)
             cache.delete(limit_key)
             nxt = request.GET.get('next', '')
             return redirect(nxt or 'dashboard')
@@ -1589,6 +1618,7 @@ def calculate_market_price(request):
 
 # ── Supplier registration ──────────────────────────────────────────────────────
 
+@beta_feature('SUPPLIERS_ENABLED')
 def register_supplier(request):
     if request.user.is_authenticated:
         return redirect('dashboard')
@@ -1621,6 +1651,7 @@ def register_supplier(request):
 
 # ── Supplier dashboard ─────────────────────────────────────────────────────────
 
+@beta_feature('SUPPLIERS_ENABLED')
 @login_required
 def supplier_dashboard(request):
     if request.user.role != 'supplier':
@@ -1648,6 +1679,7 @@ def supplier_dashboard(request):
 
 # ── Browse suppliers ───────────────────────────────────────────────────────────
 
+@beta_feature('SUPPLIERS_ENABLED')
 def browse_suppliers(request):
     keyword  = request.GET.get('q', '').strip()
     category = request.GET.get('category', '').strip()
@@ -1708,6 +1740,7 @@ def browse_suppliers(request):
 
 # ── Supplier public profile ────────────────────────────────────────────────────
 
+@beta_feature('SUPPLIERS_ENABLED')
 def supplier_profile(request, pk):
     supplier_user = get_object_or_404(User, pk=pk, role=User.ROLE_SUPPLIER)
     profile = get_object_or_404(SupplierProfile, user=supplier_user)
@@ -1735,6 +1768,7 @@ def supplier_profile(request, pk):
 
 # ── Send enquiry ───────────────────────────────────────────────────────────────
 
+@beta_feature('SUPPLIERS_ENABLED')
 @login_required
 def send_enquiry(request, supplier_pk):
     supplier_user = get_object_or_404(User, pk=supplier_pk, role=User.ROLE_SUPPLIER)
@@ -1769,6 +1803,7 @@ def send_enquiry(request, supplier_pk):
 
 # ── Enquiry detail ─────────────────────────────────────────────────────────────
 
+@beta_feature('SUPPLIERS_ENABLED')
 @login_required
 def enquiry_detail(request, pk):
     enquiry = get_object_or_404(SupplierEnquiry, pk=pk)
@@ -1793,6 +1828,7 @@ def enquiry_detail(request, pk):
 
 # ── Submit supplier quote ──────────────────────────────────────────────────────
 
+@beta_feature('SUPPLIERS_ENABLED')
 @login_required
 @require_POST
 def submit_supplier_quote(request, pk):
@@ -1876,6 +1912,7 @@ def submit_supplier_quote(request, pk):
 
 # ── Respond to supplier quote ──────────────────────────────────────────────────
 
+@beta_feature('SUPPLIERS_ENABLED')
 @login_required
 @require_POST
 def respond_to_quote(request, enquiry_pk, quote_pk):
@@ -1904,6 +1941,7 @@ def respond_to_quote(request, enquiry_pk, quote_pk):
 
 # ── Supplier enquiry messages ──────────────────────────────────────────────────
 
+@beta_feature('SUPPLIERS_ENABLED')
 @login_required
 def supplier_enquiry_messages(request, pk):
     enquiry = get_object_or_404(SupplierEnquiry, pk=pk)
