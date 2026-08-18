@@ -63,8 +63,13 @@ main{flex:1;display:flex;align-items:center;justify-content:center;padding:40px 
         {% endif %}
         <button type="submit" class="btn btn-primary" style="width:100%;padding:13px;" id="loginBtn">Log in as Client</button>
       </form>
-      <div class="divider">or</div>
-      <button class="social-btn" disabled>🌐 Continue with Google (coming soon)</button>
+      {% comment %}
+        No Google sign-in button here until it's actually connected — no
+        "coming soon" placeholder, and no Google branding of any kind until
+        the real integration is live. Google's Identity brand guidelines
+        also require using their own official "Sign in with Google" button
+        asset/generator, not a substitute icon, once it is.
+      {% endcomment %}
     </div>
   </div>
 </main>

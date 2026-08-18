@@ -247,11 +247,11 @@ ADMIN_EMAIL = os.environ.get('ADMIN_EMAIL', '').strip()
 FIREBASE_CREDENTIALS_JSON = os.environ.get('FIREBASE_CREDENTIALS_JSON', '').strip()
 
 # ── Unlaunched-feature gates ───────────────────────────────────────────────────
-# Off by default in every environment, including production, until explicitly
-# turned on — not just a DEBUG-only gate. Staff and users with
-# User.is_tester=True can preview a gated feature regardless of this flag (see
+# Live by default as of general availability. Can still be turned off in a
+# specific environment via the env var if needed; testers/staff can always
+# preview a gated feature regardless of this flag (see
 # marketplace.views._beta_feature and User.can_preview_unlaunched_features()).
-SUPPLIERS_ENABLED = _get_bool_env('SUPPLIERS_ENABLED', False)
+SUPPLIERS_ENABLED = _get_bool_env('SUPPLIERS_ENABLED', True)
 
 # ── Observability (optional) ──────────────────────────────────────────────────
 SENTRY_DSN = os.environ.get('SENTRY_DSN', '').strip()

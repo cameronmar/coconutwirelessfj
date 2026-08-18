@@ -37,6 +37,7 @@
         <a href="{% url 'logout' %}" class="btn-nav-outline">Log Out</a>
       {% else %}
         <a href="{% url 'how_it_works' %}">How It Works</a>
+        <a href="{% url 'register_tradie' %}">Become a Local Professional</a>
         <a href="{% url 'login' %}" class="btn-nav-outline">Log In</a>
         <a href="{% url 'register_client' %}" class="btn-nav-solid">Sign Up</a>
         {% if suppliers_visible %}

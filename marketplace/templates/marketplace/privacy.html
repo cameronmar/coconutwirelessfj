@@ -1,20 +1,146 @@
 {% extends "marketplace/base.html" %}
 {% block title %}Privacy Policy – The Coconut Wireless Network{% endblock %}
-{% block meta_description %}Read how the Coconut Wireless Network collects, uses, and protects personal information.{% endblock %}
+{% block meta_description %}Read how the Coconut Wireless Network collects, uses, shares, and protects personal information, including on the mobile app.{% endblock %}
+
+{% block extra_css %}
+<style>
+.terms-page{max-width:820px;margin:0 auto;padding:40px 20px 80px;}
+.terms-page h1{font-size:1.8rem;margin:0 0 6px;}
+.terms-page .version{font-size:.82rem;color:var(--muted);margin-bottom:32px;}
+.terms-page h2{font-size:1.1rem;color:var(--blue);margin:36px 0 10px;padding-bottom:7px;border-bottom:2px solid var(--blue-light);}
+.terms-page h3{font-size:.97rem;color:var(--text);margin:20px 0 6px;}
+.terms-page p{font-size:.9rem;color:var(--muted);line-height:1.8;margin:0 0 12px;}
+.terms-page ol,ul{font-size:.9rem;color:var(--muted);line-height:1.8;margin:0 0 12px;padding-left:22px;}
+.terms-page li{margin-bottom:5px;}
+.terms-page .toc{background:var(--blue-light);border-radius:12px;padding:18px 22px;margin-bottom:32px;}
+.terms-page .toc h2{margin:0 0 10px;border:none;font-size:.95rem;}
+.terms-page .toc ol{margin:0;}
+.terms-page .toc a{color:var(--blue);text-decoration:none;font-size:.88rem;}
+.terms-page .toc a:hover{text-decoration:underline;}
+.terms-page table{width:100%;border-collapse:collapse;font-size:.88rem;margin:0 0 16px;}
+.terms-page th,.terms-page td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--blue-light);vertical-align:top;}
+.terms-page th{color:var(--text);font-size:.82rem;text-transform:uppercase;letter-spacing:.02em;}
+.terms-page td{color:var(--muted);}
+</style>
+{% endblock %}
 
 {% block content %}
-<main class="container" style="padding:40px 20px 80px;max-width:860px;">
-  <div class="card">
-    <h1 class="mt-0">Privacy Policy (MVP)</h1>
-    <p class="text-muted"><strong>Important:</strong> This is a launch placeholder and must be reviewed by legal counsel before public launch.</p>
-    <h2>What we collect</h2>
-    <p>Account details, task details, quotes, messages, and files you upload to use the platform.</p>
-    <h2>How we use it</h2>
-    <p>To operate the Coconut Wireless Network, provide support, prevent abuse, and meet legal obligations.</p>
-    <h2>Sharing</h2>
-    <p>We only share data with service providers and authorities when required to run the service or comply with law.</p>
-    <h2>Your choices</h2>
-    <p>You can contact us to request access, correction, or deletion requests where legally available.</p>
+<div class="container">
+<div class="terms-page">
+
+  <h1>Privacy Policy</h1>
+  <p class="version">The Coconut Wireless Network · Version 2.0 · Governed by the laws of Fiji</p>
+
+  <div class="toc">
+    <h2>Contents</h2>
+    <ol>
+      <li><a href="#introduction">Introduction and Scope</a></li>
+      <li><a href="#information-we-collect">Information We Collect</a></li>
+      <li><a href="#how-we-use">How We Use Your Information</a></li>
+      <li><a href="#how-we-share">How We Share Your Information</a></li>
+      <li><a href="#retention">Data Retention</a></li>
+      <li><a href="#security">Data Security</a></li>
+      <li><a href="#your-rights">Your Rights and Choices</a></li>
+      <li><a href="#deletion">Account and Data Deletion</a></li>
+      <li><a href="#children">Children's Privacy</a></li>
+      <li><a href="#transfers">International Data Transfers</a></li>
+      <li><a href="#cookies">Cookies and Sessions</a></li>
+      <li><a href="#third-party-links">Third-Party Links</a></li>
+      <li><a href="#changes">Changes to This Policy</a></li>
+      <li><a href="#contact">Contact Us</a></li>
+    </ol>
   </div>
-</main>
+
+  <h2 id="introduction">1. Introduction and Scope</h2>
+  <p>This Privacy Policy explains what personal information the Coconut Wireless Network (the <strong>Platform</strong>) collects when you use our website and mobile apps, how we use and share it, and the choices and rights you have. It applies to clients, local professionals ("providers"), suppliers, and businesses who create an account or otherwise use the Platform.</p>
+  <p>This policy should be read together with our <a href="{% url 'terms' %}">Terms &amp; Conditions</a>. Words defined there (such as "Provider" and "Client") have the same meaning here.</p>
+
+  <h2 id="information-we-collect">2. Information We Collect</h2>
+
+  <h3>2.1 Account information you provide</h3>
+  <p>When you register, we collect your email address, password (stored in encrypted/hashed form, never in plain text), first and last name, mobile number, and town/region. If you sign in from the mobile app, we may store a device push-notification token (see 2.6) to deliver notifications, and a "keep me logged in" choice that extends how long your session stays active on that device.</p>
+
+  <h3>2.2 Local professional (provider) information</h3>
+  <p>If you register as a provider, we additionally collect your business or trading name, TIN, years of experience, bio, the trades/skills you offer, and the towns you service. To verify your credentials, we may collect documents such as your TIN letter, business licence, public liability insurance certificate, electrical contractor's licence, or plumber's licence, as applicable to your trade. These documents may contain government-issued identifiers and are used only for verification and stored securely — they are never shown publicly.</p>
+
+  <h3>2.3 Supplier information</h3>
+  <p>If you register as a supplier, we collect your business name, TIN, bio, the supply categories you offer, and the towns you service, along with verification documents such as your TIN letter and business registration. Supplier enquiries, quotes (including item lists and VAT/platform fee breakdowns), and in-Platform messages between clients and suppliers are also stored to operate that part of the Platform.</p>
+
+  <h3>2.4 Task, quote, and messaging content</h3>
+  <p>We collect the content you create while using the Platform: task descriptions, budgets, access notes, and photos you upload; quotes and in-Platform messages (with providers or suppliers); and public reviews and ratings. Message delivery and read status is recorded so you can see when a message has been seen. If you edit or delete a message, the previous version is kept internally (not shown to the other party) so a dispute or Platform Circumvention review always has the complete record. Where a provider leaves confidential feedback about a client, that feedback is used only by our team for account and dispute review — it is never shown publicly or to the client.</p>
+
+  <h3>2.5 Billing and invoicing records</h3>
+  <p>We keep internal records of platform fees and invoices (amounts in FJD, due dates, and payment status) to operate our billing. <strong>We do not collect or store payment card numbers or bank account details, and we do not process payments through the Platform</strong> — settlement between clients, providers, and suppliers, and payment of Platform fees, happens by arrangement outside the Platform, as described in our Terms.</p>
+
+  <h3>2.6 Mobile app and push notifications</h3>
+  <p>If you use our mobile app and enable notifications, we store a device push-notification token (via Firebase Cloud Messaging) so we can deliver you alerts about your tasks, quotes, and messages. You can disable this at any time in your device's notification settings.</p>
+
+  <h3>2.7 Automatically collected information</h3>
+  <p>When you accept our Terms, we record your IP address and browser/device user-agent string for legal record-keeping. We use only the cookies and session data necessary to keep you signed in and to protect against cross-site request forgery (see Section 11) — we do not use advertising, analytics, or tracking cookies or SDKs. If a technical error occurs, limited diagnostic information may be sent to our error-monitoring tool, which we configure to exclude personal information by default.</p>
+
+  <h3>2.8 Information we do not collect</h3>
+  <p>We do not collect precise GPS or device location — only the general town/region you select from a list. We do not use advertising or analytics tracking of any kind.</p>
+
+  <h2 id="how-we-use">3. How We Use Your Information</h2>
+  <ul>
+    <li>To create and manage your account;</li>
+    <li>To connect clients with providers and suppliers, display tasks, enquiries, quotes, profiles, and reviews, and enable in-Platform messaging;</li>
+    <li>To verify provider and supplier documents and credentials;</li>
+    <li>To calculate and issue Platform fee invoices;</li>
+    <li>To deliver push notifications you've enabled, and essential account or service communications;</li>
+    <li>To investigate disputes, enforce our Terms (including monitoring for Platform Circumvention), and prevent fraud or abuse;</li>
+    <li>To comply with legal obligations, including responding to lawful requests from authorities; and</li>
+    <li>To maintain and improve the security, reliability, and functionality of the Platform.</li>
+  </ul>
+
+  <h2 id="how-we-share">4. How We Share Your Information</h2>
+  <p>We share information with other users only as necessary for the Platform to work — for example, a provider or supplier sees a client's task or enquiry details in order to quote on it, and a client sees a provider's or supplier's public profile, quotes, and reviews.</p>
+  <p>We share information with service providers who process it on our behalf, limited to what they need to provide their service:</p>
+  <table>
+    <tr><th>Service provider type</th><th>Purpose</th></tr>
+    <tr><td>Cloud hosting</td><td>Running the Platform's website and mobile app backend</td></tr>
+    <tr><td>Object storage provider</td><td>Storing uploaded photos and verification documents</td></tr>
+    <tr><td>Email delivery provider</td><td>Sending account and transactional emails</td></tr>
+    <tr><td>Push notification service (Firebase)</td><td>Delivering mobile app notifications, if enabled</td></tr>
+    <tr><td>Error-monitoring tool</td><td>Diagnosing technical faults; configured to exclude personal data by default</td></tr>
+  </table>
+  <p>We may also disclose information where required by law, to protect our legal rights, or to protect the safety of our users. <strong>We do not sell your personal information</strong>, and we do not share it with third parties for their own advertising or marketing purposes.</p>
+
+  <h2 id="retention">5. Data Retention</h2>
+  <p>We keep your information for as long as your account is active, and afterward for as long as reasonably necessary to meet legal, tax, accounting, or dispute-resolution obligations. Verification documents are retained only as long as needed for verification and compliance purposes. Message edit history is retained for dispute/Platform Circumvention review as described in Section 2.4. If you delete your account, we remove or anonymize personal information that we are not otherwise required to keep, within a reasonable time.</p>
+
+  <h2 id="security">6. Data Security</h2>
+  <p>We use industry-standard safeguards to protect your information, including encrypted connections (HTTPS), access controls limiting who on our team can view sensitive data, and private, non-public storage for verification documents. No method of transmission or storage is completely secure, and we cannot guarantee absolute security.</p>
+
+  <h2 id="your-rights">7. Your Rights and Choices</h2>
+  <p>You can review and update most of your account and profile information at any time by logging in. You can disable push notifications from your device settings. Depending on where you're located, you may have additional rights under applicable data protection law — for example, to request a copy of your data, correction, restriction of processing, or to object to certain uses. Contact us (Section 14) and we will respond in accordance with applicable law.</p>
+
+  <h2 id="deletion">8. Account and Data Deletion</h2>
+  <p>You may request deletion of your account and associated personal information at any time by contacting us through our <a href="{% url 'contact_support' %}">Support page</a>. We will delete or anonymize your personal information within a reasonable time, except where we are required or permitted by law to retain certain records — for example, financial and invoicing records, or records relevant to an active dispute, investigation, or Platform Circumvention case.</p>
+
+  <h2 id="children">9. Children's Privacy</h2>
+  <p>The Platform is intended for users aged 18 and over — entering into service agreements and paying invoices through the Platform requires the legal capacity to contract. We do not knowingly collect personal information from anyone under 18. If we learn that we have done so, we will delete it.</p>
+
+  <h2 id="transfers">10. International Data Transfers</h2>
+  <p>Our hosting, storage, and other service providers may process your information outside Fiji, in countries where they operate their infrastructure. By using the Platform, you understand that your information may be transferred to and processed in those countries, and we take reasonable steps to ensure it continues to be protected wherever it is processed.</p>
+
+  <h2 id="cookies">11. Cookies and Sessions</h2>
+  <p>We use only the cookies and session mechanisms necessary for the Platform to work: a session cookie that keeps you signed in (extended if you choose "keep me logged in"), and a security cookie that protects against cross-site request forgery. We do not use advertising, analytics, or third-party tracking cookies.</p>
+
+  <h2 id="third-party-links">12. Third-Party Links</h2>
+  <p>Sponsor banners or business profiles may link to third-party websites. We are not responsible for the privacy practices of those third-party sites — please review their own privacy policies.</p>
+
+  <h2 id="changes">13. Changes to This Policy</h2>
+  <p>We may update this policy from time to time. If we make material changes, we will notify you — for example, by posting a notice on the Platform or sending an email — before the changes take effect.</p>
+
+  <h2 id="contact">14. Contact Us</h2>
+  <p>Questions about this policy, or requests relating to your personal information (access, correction, or deletion), can be sent via our <a href="{% url 'contact_support' %}">Support page</a>.</p>
+
+  <p style="margin-top:48px;font-size:.82rem;color:var(--muted);border-top:1px solid var(--blue-light);padding-top:18px;">
+    The Coconut Wireless Network · Fiji · Version 2.0 ·
+    For questions contact us via the Platform.
+  </p>
+
+</div>
+</div>
 {% endblock %}
