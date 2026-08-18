@@ -534,25 +534,31 @@ class Quote(models.Model):
 # ── Message ───────────────────────────────────────────────────────────────────
 
 class QuotingAppointment(models.Model):
-    STATUS_REQUESTED = 'requested'
-    STATUS_ACCEPTED  = 'accepted'
-    STATUS_DECLINED  = 'declined'
-    STATUS_COMPLETED = 'completed'
-    STATUS_CANCELLED = 'cancelled'
-    STATUS_NO_SHOW   = 'no_show'
+    STATUS_REQUESTED            = 'requested'
+    STATUS_ALTERNATIVE_PROPOSED = 'alternative_proposed'
+    STATUS_ACCEPTED             = 'accepted'
+    STATUS_DECLINED             = 'declined'
+    STATUS_COMPLETED            = 'completed'
+    STATUS_CANCELLED            = 'cancelled'
+    STATUS_NO_SHOW              = 'no_show'
     STATUS_CHOICES   = [
-        (STATUS_REQUESTED, 'Requested'),
-        (STATUS_ACCEPTED,  'Accepted'),
-        (STATUS_DECLINED,  'Declined'),
-        (STATUS_COMPLETED, 'Completed'),
-        (STATUS_CANCELLED, 'Cancelled'),
-        (STATUS_NO_SHOW,   'No show'),
+        (STATUS_REQUESTED,            'Requested'),
+        (STATUS_ALTERNATIVE_PROPOSED, 'Alternative times proposed'),
+        (STATUS_ACCEPTED,             'Accepted'),
+        (STATUS_DECLINED,             'Declined'),
+        (STATUS_COMPLETED,            'Completed'),
+        (STATUS_CANCELLED,            'Cancelled'),
+        (STATUS_NO_SHOW,              'No show'),
     ]
 
     task             = models.ForeignKey(Task, on_delete=models.CASCADE, related_name='quoting_appointments')
     client           = models.ForeignKey(User, on_delete=models.CASCADE, related_name='client_quoting_appointments')
     provider         = models.ForeignKey(User, on_delete=models.CASCADE, related_name='provider_quoting_appointments')
     appointment_note = models.TextField(blank=True)
+    # Set when the client counters with different times instead of just
+    # declining — see QuotingAppointmentSlot.proposed_by for where those
+    # alternative slots themselves live (same table, same appointment).
+    alternative_note = models.TextField(blank=True)
     status           = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_REQUESTED)
     selected_slot    = models.ForeignKey('QuotingAppointmentSlot', null=True, blank=True, on_delete=models.SET_NULL, related_name='+')
     created_at       = models.DateTimeField(auto_now_add=True)
@@ -578,11 +584,23 @@ class QuotingAppointment(models.Model):
 
 
 class QuotingAppointmentSlot(models.Model):
+    PROPOSED_BY_PROVIDER = 'provider'
+    PROPOSED_BY_CLIENT   = 'client'
+    PROPOSED_BY_CHOICES  = [
+        (PROPOSED_BY_PROVIDER, 'Provider'),
+        (PROPOSED_BY_CLIENT,   'Client'),
+    ]
+
     quoting_appointment = models.ForeignKey(QuotingAppointment, on_delete=models.CASCADE, related_name='slots')
     proposed_date       = models.DateField()
     start_time          = models.TimeField()
     end_time            = models.TimeField()
     is_selected         = models.BooleanField(default=False)
+    # Provider proposes the original 1-3 options; if the client counters
+    # instead of accepting/declining, their alternative slots land in this
+    # same table on the same appointment, tagged 'client' — lets the
+    # provider then accept one the same way the client accepts theirs.
+    proposed_by         = models.CharField(max_length=10, choices=PROPOSED_BY_CHOICES, default=PROPOSED_BY_PROVIDER)
     created_at          = models.DateTimeField(auto_now_add=True)
 
     class Meta:

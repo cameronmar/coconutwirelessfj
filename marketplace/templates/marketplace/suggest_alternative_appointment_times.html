@@ -1,0 +1,102 @@
+{% extends "marketplace/base.html" %}
+{% block title %}Suggest Alternative Times – The Coconut Wireless Network{% endblock %}
+
+{% block extra_css %}
+<style>
+.page-card{max-width:760px;margin:40px auto;padding:24px;background:var(--white);border-radius:16px;box-shadow:0 6px 24px rgba(0,80,120,.08);}
+.page-card h1{font-size:1.4rem;margin-bottom:10px;}
+.field{margin-bottom:16px;}
+.field label{display:block;font-weight:700;margin-bottom:8px;}
+.field .form-input{width:100%;}
+.slot-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;align-items:start;}
+.slot-grid .field{margin-bottom:0;}
+.btn-row{display:flex;gap:12px;flex-wrap:wrap;margin-top:18px;}
+.proposed-card{background:var(--blue-light);border-radius:14px;padding:16px;margin-bottom:20px;}
+.proposed-card h2{margin:0 0 10px;font-size:1rem;color:var(--blue);}
+.proposed-card ul{margin:8px 0 0 18px;color:var(--muted);}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container">
+  <div class="page-card">
+    <h1>Suggest alternative times</h1>
+    <p class="desc-text">None of {{ appointment.provider.full_name }}'s proposed times work? Offer up to three alternatives instead of just declining.</p>
+
+    <div class="proposed-card">
+      <h2>{{ appointment.provider.full_name }} proposed</h2>
+      <ul>
+        {% for slot in appointment.slots.all %}
+        <li>{{ slot.proposed_date }} {{ slot.start_time|time:'H:i' }}–{{ slot.end_time|time:'H:i' }}</li>
+        {% endfor %}
+      </ul>
+      {% if appointment.appointment_note %}<p style="margin-top:10px;">{{ appointment.appointment_note }}</p>{% endif %}
+    </div>
+
+    <form method="post">
+      {% csrf_token %}
+      <div class="field">
+        <label for="id_appointment_note">Note for {{ appointment.provider.full_name }} (optional)</label>
+        {{ form.appointment_note }}
+      </div>
+
+      <h2 style="margin-top:0.5rem;">Alternative 1</h2>
+      <div class="slot-grid">
+        <div class="field">
+          <label for="id_slot_1_date">Date</label>
+          {{ form.slot_1_date }}
+        </div>
+        <div class="field">
+          <label for="id_slot_1_start">Start time</label>
+          {{ form.slot_1_start }}
+        </div>
+        <div class="field">
+          <label for="id_slot_1_end">End time</label>
+          {{ form.slot_1_end }}
+        </div>
+      </div>
+
+      <h2>Alternative 2</h2>
+      <div class="slot-grid">
+        <div class="field">
+          <label for="id_slot_2_date">Date</label>
+          {{ form.slot_2_date }}
+        </div>
+        <div class="field">
+          <label for="id_slot_2_start">Start time</label>
+          {{ form.slot_2_start }}
+        </div>
+        <div class="field">
+          <label for="id_slot_2_end">End time</label>
+          {{ form.slot_2_end }}
+        </div>
+      </div>
+
+      <h2>Alternative 3</h2>
+      <div class="slot-grid">
+        <div class="field">
+          <label for="id_slot_3_date">Date</label>
+          {{ form.slot_3_date }}
+        </div>
+        <div class="field">
+          <label for="id_slot_3_start">Start time</label>
+          {{ form.slot_3_start }}
+        </div>
+        <div class="field">
+          <label for="id_slot_3_end">End time</label>
+          {{ form.slot_3_end }}
+        </div>
+      </div>
+
+      {% if form.non_field_errors %}
+      <div class="field-error">{{ form.non_field_errors }}</div>
+      {% endif %}
+
+      <div class="btn-row">
+        <button type="submit" class="btn btn-primary">Send alternative times</button>
+        <a href="{% url 'task_detail' task.pk %}" class="btn btn-outline-blue">Back to task</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

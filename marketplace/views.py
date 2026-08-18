@@ -1078,6 +1078,82 @@ def decline_quoting_appointment(request, pk, appt_pk):
 
 
 @login_required
+def suggest_alternative_appointment_times(request, pk, appt_pk):
+    """The client's alternative to a flat decline: instead of rejecting the
+    provider's proposed times outright, counter with 1-3 of their own.
+    Reuses QuotingAppointmentForm — same shape (up to 3 date/start/end
+    options plus a note) as the provider's original request, just tagged
+    onto the existing appointment as PROPOSED_BY_CLIENT slots rather than
+    creating a new QuotingAppointment."""
+    _require_task_poster(request)
+    task = get_object_or_404(Task, pk=pk, client=request.user)
+    appointment = get_object_or_404(QuotingAppointment, pk=appt_pk, task=task, status=QuotingAppointment.STATUS_REQUESTED)
+    form = QuotingAppointmentForm(request.POST or None)
+    if request.method == 'POST' and form.is_valid():
+        for slot in form.cleaned_data['slots']:
+            QuotingAppointmentSlot.objects.create(
+                quoting_appointment=appointment,
+                proposed_date=slot['date'], start_time=slot['start'], end_time=slot['end'],
+                proposed_by=QuotingAppointmentSlot.PROPOSED_BY_CLIENT,
+            )
+        appointment.alternative_note = form.cleaned_data.get('appointment_note', '')
+        appointment.status = QuotingAppointment.STATUS_ALTERNATIVE_PROPOSED
+        appointment.save(update_fields=['alternative_note', 'status', 'updated_at'])
+        flash.success(request, 'Your alternative times have been sent to the local professional.')
+        return redirect('task_detail', pk=pk)
+    return render(request, 'marketplace/suggest_alternative_appointment_times.html', {
+        'task': task,
+        'appointment': appointment,
+        'form': form,
+    })
+
+
+@login_required
+@require_POST
+def accept_alternative_slot(request, pk, appt_pk, slot_pk):
+    """Symmetric to accept_quoting_appointment_slot, reversed: the provider
+    accepting one of the client's counter-proposed times instead."""
+    approval_redirect = _require_quoting_tradie(request)
+    if approval_redirect:
+        return approval_redirect
+    appointment = get_object_or_404(
+        QuotingAppointment, pk=appt_pk, task__pk=pk, provider=request.user,
+        status=QuotingAppointment.STATUS_ALTERNATIVE_PROPOSED,
+    )
+    slot = get_object_or_404(
+        QuotingAppointmentSlot, pk=slot_pk, quoting_appointment=appointment,
+        proposed_by=QuotingAppointmentSlot.PROPOSED_BY_CLIENT,
+    )
+    appointment.status = QuotingAppointment.STATUS_ACCEPTED
+    appointment.selected_slot = slot
+    appointment.save()
+    appointment.slots.update(is_selected=False)
+    slot.is_selected = True
+    slot.save()
+    flash.success(request, 'Quoting appointment confirmed at the client’s suggested time.')
+    return redirect('task_detail', pk=pk)
+
+
+@login_required
+@require_POST
+def decline_alternative_appointment(request, pk, appt_pk):
+    """Provider declines the client's counter-proposed times too — ends
+    this appointment request; they can send a fresh one if they still want
+    to quote this job."""
+    approval_redirect = _require_quoting_tradie(request)
+    if approval_redirect:
+        return approval_redirect
+    appointment = get_object_or_404(
+        QuotingAppointment, pk=appt_pk, task__pk=pk, provider=request.user,
+        status=QuotingAppointment.STATUS_ALTERNATIVE_PROPOSED,
+    )
+    appointment.status = QuotingAppointment.STATUS_DECLINED
+    appointment.save()
+    flash.success(request, "You declined the client's alternative times. You can send a new appointment request if needed.")
+    return redirect('task_detail', pk=pk)
+
+
+@login_required
 @require_POST
 def cancel_quoting_appointment(request, pk, appt_pk):
     approval_redirect = _require_quoting_tradie(request)

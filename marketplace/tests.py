@@ -622,6 +622,162 @@ class QuotingAppointmentSecurityTests(TestCase):
         self.assertEqual(self.appointment.status, QuotingAppointment.STATUS_REQUESTED)
 
 
+@override_settings(
+    STORAGES={
+        'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
+        'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
+    },
+)
+class AppointmentAlternativeTimesTests(TestCase):
+    """The client's alternative to a flat decline: counter-propose their
+    own times instead of just rejecting the provider's options."""
+
+    def setUp(self):
+        self.client_user = User.objects.create_user(
+            email='alt-client@example.com', password='pass12345',
+            first_name='Client', last_name='User', role=User.ROLE_CLIENT, town='Suva',
+        )
+        self.tradie_user = User.objects.create_user(
+            email='alt-tradie@example.com', password='pass12345',
+            first_name='Tradie', last_name='User', role=User.ROLE_TRADIE, town='Suva',
+        )
+        self.stranger = User.objects.create_user(
+            email='alt-stranger@example.com', password='pass12345',
+            first_name='Stranger', last_name='User', role=User.ROLE_CLIENT, town='Nadi',
+        )
+        TradieProfile.objects.create(
+            user=self.tradie_user, trades=['cleaning'], service_towns=['Suva'],
+            verification_status=TradieProfile.VERIFICATION_APPROVED,
+        )
+        self.task = Task.objects.create(
+            client=self.client_user, title='Fix sink', category='plumbing',
+            description='Kitchen sink leaking', budget=Decimal('150.00'), town='Suva',
+        )
+        self.appointment = QuotingAppointment.objects.create(
+            task=self.task, client=self.client_user, provider=self.tradie_user, status=QuotingAppointment.STATUS_REQUESTED,
+        )
+        self.provider_slot = QuotingAppointmentSlot.objects.create(
+            quoting_appointment=self.appointment,
+            proposed_date='2026-08-01', start_time='09:00', end_time='10:00',
+            proposed_by=QuotingAppointmentSlot.PROPOSED_BY_PROVIDER,
+        )
+
+    def _alt_payload(self):
+        return {
+            'slot_1_date': '2026-08-05', 'slot_1_start': '14:00', 'slot_1_end': '15:00',
+            'appointment_note': 'Afternoons work better for me.',
+        }
+
+    def test_client_can_suggest_alternative_times(self):
+        self.client.login(username=self.client_user.email, password='pass12345')
+        response = self.client.post(
+            reverse('suggest_alternative_appointment_times', args=[self.task.pk, self.appointment.pk]),
+            self._alt_payload(), secure=True,
+        )
+        self.assertEqual(response.status_code, 302)
+        self.appointment.refresh_from_db()
+        self.assertEqual(self.appointment.status, QuotingAppointment.STATUS_ALTERNATIVE_PROPOSED)
+        self.assertEqual(self.appointment.alternative_note, 'Afternoons work better for me.')
+        client_slots = self.appointment.slots.filter(proposed_by=QuotingAppointmentSlot.PROPOSED_BY_CLIENT)
+        self.assertEqual(client_slots.count(), 1)
+        self.assertEqual(str(client_slots.first().proposed_date), '2026-08-05')
+        # The provider's original slot is untouched, still there for reference.
+        self.assertTrue(self.appointment.slots.filter(pk=self.provider_slot.pk, proposed_by='provider').exists())
+
+    def test_stranger_cannot_suggest_alternative_times(self):
+        self.client.login(username=self.stranger.email, password='pass12345')
+        response = self.client.post(
+            reverse('suggest_alternative_appointment_times', args=[self.task.pk, self.appointment.pk]),
+            self._alt_payload(), secure=True,
+        )
+        self.assertEqual(response.status_code, 404)  # get_object_or_404 scoped to client=request.user
+
+    def test_suggesting_alternatives_requires_at_least_one_slot(self):
+        self.client.login(username=self.client_user.email, password='pass12345')
+        response = self.client.post(
+            reverse('suggest_alternative_appointment_times', args=[self.task.pk, self.appointment.pk]),
+            {'appointment_note': 'no times given'}, secure=True,
+        )
+        self.assertEqual(response.status_code, 200)  # re-renders the form with errors
+        self.appointment.refresh_from_db()
+        self.assertEqual(self.appointment.status, QuotingAppointment.STATUS_REQUESTED)
+
+    def test_cannot_suggest_alternatives_once_already_accepted(self):
+        self.appointment.status = QuotingAppointment.STATUS_ACCEPTED
+        self.appointment.save()
+        self.client.login(username=self.client_user.email, password='pass12345')
+        response = self.client.post(
+            reverse('suggest_alternative_appointment_times', args=[self.task.pk, self.appointment.pk]),
+            self._alt_payload(), secure=True,
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_provider_can_accept_a_client_alternative_slot(self):
+        self.client.login(username=self.client_user.email, password='pass12345')
+        self.client.post(
+            reverse('suggest_alternative_appointment_times', args=[self.task.pk, self.appointment.pk]),
+            self._alt_payload(), secure=True,
+        )
+        alt_slot = self.appointment.slots.get(proposed_by=QuotingAppointmentSlot.PROPOSED_BY_CLIENT)
+
+        self.client.logout()
+        self.client.login(username=self.tradie_user.email, password='pass12345')
+        response = self.client.post(
+            reverse('accept_alternative_slot', args=[self.task.pk, self.appointment.pk, alt_slot.pk]), secure=True,
+        )
+        self.assertEqual(response.status_code, 302)
+        self.appointment.refresh_from_db()
+        self.assertEqual(self.appointment.status, QuotingAppointment.STATUS_ACCEPTED)
+        self.assertEqual(self.appointment.selected_slot_id, alt_slot.pk)
+        alt_slot.refresh_from_db()
+        self.assertTrue(alt_slot.is_selected)
+
+    def test_provider_cannot_accept_their_own_original_slot_via_the_alternative_endpoint(self):
+        """accept_alternative_slot is scoped to proposed_by=client — the
+        provider's own original slot must go through the normal accept
+        flow, not this one, even if they guess its pk."""
+        self.appointment.status = QuotingAppointment.STATUS_ALTERNATIVE_PROPOSED
+        self.appointment.save()
+        self.client.login(username=self.tradie_user.email, password='pass12345')
+        response = self.client.post(
+            reverse('accept_alternative_slot', args=[self.task.pk, self.appointment.pk, self.provider_slot.pk]), secure=True,
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_provider_can_decline_the_alternatives_too(self):
+        self.client.login(username=self.client_user.email, password='pass12345')
+        self.client.post(
+            reverse('suggest_alternative_appointment_times', args=[self.task.pk, self.appointment.pk]),
+            self._alt_payload(), secure=True,
+        )
+        self.client.logout()
+        self.client.login(username=self.tradie_user.email, password='pass12345')
+        response = self.client.post(
+            reverse('decline_alternative_appointment', args=[self.task.pk, self.appointment.pk]), secure=True,
+        )
+        self.assertEqual(response.status_code, 302)
+        self.appointment.refresh_from_db()
+        self.assertEqual(self.appointment.status, QuotingAppointment.STATUS_DECLINED)
+
+    def test_client_cannot_accept_alternative_slot_endpoint(self):
+        """accept_alternative_slot is the provider's action — a client
+        hitting it (even on their own appointment) should be rejected."""
+        self.appointment.status = QuotingAppointment.STATUS_ALTERNATIVE_PROPOSED
+        self.appointment.save()
+        alt_slot = QuotingAppointmentSlot.objects.create(
+            quoting_appointment=self.appointment,
+            proposed_date='2026-08-05', start_time='14:00', end_time='15:00',
+            proposed_by=QuotingAppointmentSlot.PROPOSED_BY_CLIENT,
+        )
+        self.client.login(username=self.client_user.email, password='pass12345')
+        response = self.client.post(
+            reverse('accept_alternative_slot', args=[self.task.pk, self.appointment.pk, alt_slot.pk]), secure=True,
+        )
+        self.assertEqual(response.status_code, 302)  # redirected by _require_quoting_tradie (wrong role)
+        self.appointment.refresh_from_db()
+        self.assertEqual(self.appointment.status, QuotingAppointment.STATUS_ALTERNATIVE_PROPOSED)
+
+
 class ConversationAccessTests(TestCase):
     """Covers the fix for conversation() only checking the requester is a
     task party, never the other end — previously a logged-in user could

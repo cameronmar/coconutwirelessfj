@@ -119,16 +119,34 @@
           <p class="q-msg">{{ appointment.appointment_note }}</p>
           {% endif %}
           <div class="q-msg" style="margin-bottom:10px;">
-            <strong>Proposed times</strong>
+            <strong>{{ appointment.provider.first_name }} proposed</strong>
             <ul style="margin:8px 0 0 18px;">
               {% for slot in appointment.slots.all %}
-              <li>
-                {{ slot.proposed_date }} {{ slot.start_time|time:"H:i" }}–{{ slot.end_time|time:"H:i" }}
-                {% if slot.is_selected %}<strong>– selected</strong>{% endif %}
-              </li>
+                {% if slot.proposed_by == 'provider' %}
+                <li>
+                  {{ slot.proposed_date }} {{ slot.start_time|time:"H:i" }}–{{ slot.end_time|time:"H:i" }}
+                  {% if slot.is_selected %}<strong>– selected</strong>{% endif %}
+                </li>
+                {% endif %}
               {% endfor %}
             </ul>
           </div>
+          {% if appointment.status == 'alternative_proposed' %}
+          <div class="q-msg" style="margin-bottom:10px;">
+            <strong>{{ task.client.first_name }} suggested instead</strong>
+            {% if appointment.alternative_note %}<p style="margin:4px 0 0;">{{ appointment.alternative_note }}</p>{% endif %}
+            <ul style="margin:8px 0 0 18px;">
+              {% for slot in appointment.slots.all %}
+                {% if slot.proposed_by == 'client' %}
+                <li>
+                  {{ slot.proposed_date }} {{ slot.start_time|time:"H:i" }}–{{ slot.end_time|time:"H:i" }}
+                  {% if slot.is_selected %}<strong>– selected</strong>{% endif %}
+                </li>
+                {% endif %}
+              {% endfor %}
+            </ul>
+          </div>
+          {% endif %}
           <div class="q-actions">
             {% if user == task.client and appointment.status == 'requested' %}
               {% for slot in appointment.slots.all %}
@@ -137,9 +155,24 @@
                 <button type="submit" class="btn btn-sm btn-outline-blue">Confirm {{ slot.proposed_date }} {{ slot.start_time|time:"H:i" }}</button>
               </form>
               {% endfor %}
+              <a href="{% url 'suggest_alternative_appointment_times' task.pk appointment.pk %}" class="btn btn-outline-blue btn-sm">Suggest different times</a>
               <form method="post" action="{% url 'decline_quoting_appointment' task.pk appointment.pk %}" style="margin:0;">
                 {% csrf_token %}
                 <button type="submit" class="btn btn-danger btn-sm">Decline all options</button>
+              </form>
+            {% endif %}
+            {% if user == appointment.provider and appointment.status == 'alternative_proposed' %}
+              {% for slot in appointment.slots.all %}
+                {% if slot.proposed_by == 'client' %}
+                <form method="post" action="{% url 'accept_alternative_slot' task.pk appointment.pk slot.pk %}" style="margin:0;">
+                  {% csrf_token %}
+                  <button type="submit" class="btn btn-sm btn-outline-blue">Confirm {{ slot.proposed_date }} {{ slot.start_time|time:"H:i" }}</button>
+                </form>
+                {% endif %}
+              {% endfor %}
+              <form method="post" action="{% url 'decline_alternative_appointment' task.pk appointment.pk %}" style="margin:0;">
+                {% csrf_token %}
+                <button type="submit" class="btn btn-danger btn-sm">Decline these too</button>
               </form>
             {% endif %}
             {% if user == appointment.provider and appointment.status == 'requested' %}
