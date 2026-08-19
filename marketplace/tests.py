@@ -2612,6 +2612,12 @@ class SupplierMessagePollTests(TestCase):
     }
 )
 class AccountDeletionTests(TestCase):
+    @override_settings(
+        STORAGES={
+            'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
+            'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
+        }
+    )
     def setUp(self):
         self.user = User.objects.create_user(
             email='deleteme@example.com', password='pass12345',
