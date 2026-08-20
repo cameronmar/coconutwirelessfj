@@ -6,7 +6,7 @@ from django.db import migrations
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('marketplace', '0036_backfill_workspace_fks'),
+        ('marketplace', '0048_backfill_workspace_fks'),
     ]
 
     operations = [

@@ -8,7 +8,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('marketplace', '0033_seed_massage'),
+        ('marketplace', '0045_alter_task_budget'),
     ]
 
     operations = [

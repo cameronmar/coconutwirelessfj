@@ -2898,6 +2898,7 @@ def _request_with_session(user):
     """RequestFactory requests have no session/auth middleware attached by
     default — build one by hand for workspaces.py functions that read/write
     request.session."""
+    from django.test import RequestFactory
     request = RequestFactory().get('/')
     from django.contrib.sessions.middleware import SessionMiddleware
     SessionMiddleware(lambda r: None).process_request(request)

@@ -61,7 +61,7 @@ def noop_reverse(apps, schema_editor):
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('marketplace', '0034_workspace_models'),
+        ('marketplace', '0046_workspace_models'),
     ]
 
     operations = [

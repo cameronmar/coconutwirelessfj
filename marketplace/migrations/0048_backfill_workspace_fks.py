@@ -133,7 +133,7 @@ def noop_reverse(apps, schema_editor):
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('marketplace', '0035_backfill_workspaces'),
+        ('marketplace', '0047_backfill_workspaces'),
     ]
 
     operations = [
