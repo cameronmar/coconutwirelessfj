@@ -3663,6 +3663,18 @@ class AddRoleViewTests(TestCase):
         response = self.client.get(reverse('add_role_choose'), secure=True)
         self.assertNotContains(response, 'href="{}"'.format(reverse('add_role_tradie')))
 
+    @override_settings(SUPPLIERS_ENABLED=False)
+    def test_add_role_choose_hides_supplier_when_flag_disabled(self):
+        self.client.login(username=self.user.email, password='pass12345')
+        response = self.client.get(reverse('add_role_choose'), secure=True)
+        self.assertNotContains(response, 'href="{}"'.format(reverse('add_role_supplier')))
+
+    @override_settings(SUPPLIERS_ENABLED=False)
+    def test_add_role_supplier_404s_when_flag_disabled(self):
+        self.client.login(username=self.user.email, password='pass12345')
+        response = self.client.get(reverse('add_role_supplier'), secure=True)
+        self.assertEqual(response.status_code, 404)
+
     def test_manage_linked_logins_renders(self):
         self.client.login(username=self.user.email, password='pass12345')
         response = self.client.get(reverse('manage_linked_logins'), secure=True)
@@ -3788,6 +3800,41 @@ class AccountMergeTests(TestCase):
         self.assertEqual(linked, {self.user_a.pk})
 
 
+class RoleTabLabelDisambiguationTests(TestCase):
+    """Every linked user gets their own client workspace, so two linked
+    accounts commonly produce two tabs that would otherwise both just say
+    'Client' with no way to tell them apart -- caught via a live browser
+    walkthrough, not the earlier unit tests (which never had two linked
+    users who both held the same role)."""
+
+    def setUp(self):
+        self.user_a = User.objects.create_user(
+            email='tabs-a@example.com', password='pass-a-12345',
+            first_name='Alpha', last_name='User', role=User.ROLE_CLIENT, town='Suva',
+        )
+        workspaces.create_client_workspace(self.user_a)
+        self.user_b = User.objects.create_user(
+            email='tabs-b@example.com', password='pass-b-12345',
+            first_name='Beta', last_name='User', role=User.ROLE_SUPPLIER, town='Nadi',
+        )
+        SupplierProfile.objects.create(user=self.user_b, supply_categories=['building-materials'], service_towns=['Nadi'])
+        workspaces.create_client_workspace(self.user_b)
+        workspaces.create_supplier_workspace(self.user_b)
+        workspaces.link_accounts(self.user_a, self.user_b)
+
+    def test_own_tabs_are_unlabeled_other_users_tabs_are_suffixed(self):
+        tabs = workspaces.get_role_tabs(self.user_a)
+        by_role_and_owner = {(t['user_id'], t['role']): t['label'] for t in tabs}
+        self.assertEqual(by_role_and_owner[(self.user_a.pk, User.ROLE_CLIENT)], 'Client')
+        self.assertEqual(by_role_and_owner[(self.user_b.pk, User.ROLE_CLIENT)], 'Client · Beta')
+        self.assertEqual(by_role_and_owner[(self.user_b.pk, User.ROLE_SUPPLIER)], 'Supplier · Beta')
+
+    def test_labels_are_no_longer_ambiguous(self):
+        tabs = workspaces.get_role_tabs(self.user_a)
+        labels = [t['label'] for t in tabs]
+        self.assertEqual(len(labels), len(set(labels)))
+
+
 class SwitchTabTests(TestCase):
     def setUp(self):
         self.user_a = User.objects.create_user(
@@ -3837,6 +3884,54 @@ class SwitchTabTests(TestCase):
         self.client.login(username=self.user_a.email, password='pass-a-12345')
         response = self.client.get(reverse('switch_tab'), secure=True)
         self.assertEqual(response.status_code, 405)
+
+
+class DeletedAccountUnreachableViaLinkedTabsTests(TestCase):
+    """Deleting a linked account must actually be meaningful — a linked
+    partner's tab-switcher must never remain a side channel back into it.
+    Covers the fix in delete_account (removes the deleted user's
+    LinkedAccount rows) and get_linked_users (filters account_deleted_at as
+    a backstop for any stale rows)."""
+
+    def setUp(self):
+        self.user_a = User.objects.create_user(
+            email='delink-a@example.com', password='pass-a-12345',
+            first_name='A', last_name='User', role=User.ROLE_CLIENT, town='Suva',
+        )
+        workspaces.create_client_workspace(self.user_a)
+        self.user_b = User.objects.create_user(
+            email='delink-b@example.com', password='pass-b-12345',
+            first_name='B', last_name='User', role=User.ROLE_TRADIE, town='Nadi',
+        )
+        TradieProfile.objects.create(user=self.user_b, trades=['cleaning'], service_towns=['Nadi'])
+        workspaces.create_individual_provider_workspace(self.user_b)
+        workspaces.link_accounts(self.user_a, self.user_b)
+
+    def test_deleting_an_account_removes_it_from_the_partners_linked_set(self):
+        self.client.login(username=self.user_b.email, password='pass-b-12345')
+        self.client.post(reverse('delete_account'), {'password': 'pass-b-12345', 'confirm': 'on'}, secure=True)
+        linked = {u.pk for u in workspaces.get_linked_users(self.user_a)}
+        self.assertEqual(linked, {self.user_a.pk})
+        self.assertFalse(LinkedAccount.objects.exists())
+
+    def test_switch_tab_to_a_deleted_account_is_rejected(self):
+        self.client.login(username=self.user_b.email, password='pass-b-12345')
+        self.client.post(reverse('delete_account'), {'password': 'pass-b-12345', 'confirm': 'on'}, secure=True)
+        self.client.login(username=self.user_a.email, password='pass-a-12345')
+        response = self.client.post(
+            reverse('switch_tab'), {'target_user_id': self.user_b.pk, 'target_role': User.ROLE_TRADIE}, secure=True,
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_get_linked_users_filters_a_stale_row_even_without_cleanup(self):
+        # Simulate a LinkedAccount row that somehow survived deletion
+        # (e.g. pre-existing data from before this fix) to confirm the
+        # get_linked_users() filter is a real backstop, not just reachable
+        # via delete_account's own cleanup.
+        self.user_b.account_deleted_at = django_timezone.now()
+        self.user_b.save(update_fields=['account_deleted_at'])
+        linked = {u.pk for u in workspaces.get_linked_users(self.user_a)}
+        self.assertEqual(linked, {self.user_a.pk})
 
 
 class ClearLinkedLoginTests(TestCase):

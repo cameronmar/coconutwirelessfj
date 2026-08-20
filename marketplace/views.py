@@ -62,6 +62,7 @@ from .forms import (
 from .models import (
     ContentReport,
     Invoice,
+    LinkedAccount,
     MarketListing,
     MarketOrder,
     Message,
@@ -1436,6 +1437,12 @@ def delete_account(request):
             user.is_active  = False
             user.account_deleted_at = timezone.now()
             user.save()
+            # Deletion must actually be meaningful — a linked partner's tab-
+            # switcher must never remain a side channel into this account
+            # afterward. get_linked_users() also filters account_deleted_at
+            # as a backstop, but removing the rows outright keeps the
+            # LinkedAccount table itself free of stale references.
+            LinkedAccount.objects.filter(Q(user_a=user) | Q(user_b=user)).delete()
         logout(request)
         flash.success(request, 'Your account has been deleted.')
         return redirect('home')
@@ -1459,9 +1466,14 @@ def account_linking_hub(request):
 @login_required
 def add_role_choose(request):
     held = set(workspaces.get_own_available_roles(request.user))
+    can_add_tradie = User.ROLE_TRADIE not in held
+    can_add_supplier = User.ROLE_SUPPLIER not in held and (
+        settings.SUPPLIERS_ENABLED or request.user.can_preview_unlaunched_features()
+    )
     return render(request, 'marketplace/add_role_choose.html', {
-        'can_add_tradie': User.ROLE_TRADIE not in held,
-        'can_add_supplier': User.ROLE_SUPPLIER not in held,
+        'can_add_tradie': can_add_tradie,
+        'can_add_supplier': can_add_supplier,
+        'nothing_to_add': not can_add_tradie and not can_add_supplier,
     })
 
 
@@ -1491,6 +1503,7 @@ def add_role_tradie(request):
     })
 
 
+@beta_feature('SUPPLIERS_ENABLED')
 @login_required
 def add_role_supplier(request):
     if hasattr(request.user, 'supplier_profile'):

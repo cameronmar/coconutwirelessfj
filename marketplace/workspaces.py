@@ -332,6 +332,13 @@ def get_linked_users(user):
     Transitive closure over LinkedAccount edges, always including `user`
     itself. These graphs are small (a handful of merged accounts per person
     at most), so plain BFS is fine — no need for a recursive CTE.
+
+    A deleted account (account_deleted_at set — see views.delete_account)
+    is never traversed into or returned, even if a LinkedAccount row still
+    references it: deletion must actually be meaningful, not something a
+    linked partner's tab-switcher can route around. delete_account() also
+    proactively removes that user's LinkedAccount rows on deletion; this
+    filter is the defense-in-depth backstop for any that somehow survive.
     """
     if not user or not user.is_authenticated:
         return []
@@ -344,7 +351,7 @@ def get_linked_users(user):
         next_frontier = []
         for edge in edges:
             for candidate in (edge.user_a, edge.user_b):
-                if candidate.pk not in seen:
+                if candidate.pk not in seen and not candidate.account_deleted_at:
                     seen[candidate.pk] = candidate
                     next_frontier.append(candidate.pk)
         frontier = next_frontier
@@ -358,16 +365,27 @@ def get_role_tabs(user):
     role switching to it requires; views.switch_tab performs the actual
     session-identity swap + role flip. is_current marks the tab matching
     the request's current identity+role.
+
+    Every linked user gets their own client workspace (see
+    create_client_workspace's callers), so two linked accounts commonly
+    produce two tabs that would otherwise both just say "Client" with no
+    way to tell them apart. Any tab for a DIFFERENT user than the one
+    viewing gets that user's first name appended — the current user's own
+    tabs stay unlabeled since they're already visually distinct via
+    is_current's highlight.
     """
     if not user or not user.is_authenticated:
         return []
     tabs = []
     for linked_user in get_linked_users(user):
         for role in get_own_available_roles(linked_user):
+            label = _ROLE_LABELS.get(role, role)
+            if linked_user.pk != user.pk:
+                label = f'{label} · {linked_user.first_name}'.strip(' ·')
             tabs.append({
                 'user_id': linked_user.pk,
                 'role': role,
-                'label': _ROLE_LABELS.get(role, role),
+                'label': label,
                 'is_current': linked_user.pk == user.pk and role == user.role,
             })
     return tabs

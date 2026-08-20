@@ -33,7 +33,7 @@
   </a>
   {% endif %}
 
-  {% if not can_add_tradie and not can_add_supplier %}
+  {% if nothing_to_add %}
   <p class="empty-note">You already have every role available to add here. Looking to link a separate account instead? <a href="{% url 'merge_account' %}">Merge an existing account</a>.</p>
   {% endif %}
 </div>

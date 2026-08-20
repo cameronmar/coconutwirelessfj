@@ -39,13 +39,17 @@
         <button type="submit" class="btn btn-sm" style="background:#fff2f2;color:#8a1a1a;">Clear this login</button>
       </form>
       {% for e in row.form.password.errors %}<div class="field-error">{{e}}</div>{% endfor %}
-      {% else %}
+      {% elif rows|length > 1 %}
       <p class="clear-note" title="At least one login must remain active">At least one login must remain active — this can't be cleared right now.</p>
       {% endif %}
     {% endif %}
   </div>
   {% endfor %}
 
+  {% if rows|length == 1 %}
+  <p class="page-sub">You haven't linked any other accounts yet. <a href="{% url 'account_linking_hub' %}">Add or merge another account</a>.</p>
+  {% else %}
   <p class="page-sub">Want to add another login instead? <a href="{% url 'account_linking_hub' %}">Add or merge another account</a>.</p>
+  {% endif %}
 </div>
 {% endblock %}
