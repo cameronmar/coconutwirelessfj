@@ -60,6 +60,7 @@ footer{display:none;}/* hide footer inside dashboard layout */
     <a href="{% url 'change_password' %}" class="sb-link"><span class="icon">🔑</span>Change password</a>
     <a href="{% url 'blocked_users' %}" class="sb-link"><span class="icon">🚫</span>Blocked users</a>
     <a href="{% url 'account_linking_hub' %}" class="sb-link"><span class="icon">🔗</span>Add or merge another account</a>
+    <a href="{% url 'manage_linked_logins' %}" class="sb-link"><span class="icon">👥</span>Manage linked logins</a>
     <a href="{% url 'delete_account' %}" class="sb-link"><span class="icon">⚠️</span>Delete account</a>
     <a href="{% url 'logout' %}" class="sb-link"><span class="icon">🚪</span>Log out</a>
     {% if sponsors %}
