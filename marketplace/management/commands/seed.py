@@ -9,11 +9,14 @@ from decimal import Decimal
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 
+from django.core.management import call_command
+
 from marketplace.models import (
     Message, PublicReview, PrivateReview, Quote, Task, TradieProfile, User,
     TradeCategory, TaskPhoto, PlatformSettings, PlatformFee, Invoice, InvoiceLine, Sponsor,
     QuotingAppointment, QuotingAppointmentSlot,
 )
+from marketplace import workspaces
 from marketplace.utils import create_platform_fee_for_task
 
 
@@ -391,7 +394,7 @@ class Command(BaseCommand):
         for data in sponsors_data:
             Sponsor.objects.get_or_create(
                 business_name=data['business_name'],
-                placement=data['placement'],
+                placements=[data['placement']],
                 defaults={
                     'destination_url': data['destination_url'],
                     'start_date': data['start_date'],
@@ -768,6 +771,14 @@ class Command(BaseCommand):
         t11.categories.set(TradeCategory.objects.filter(slug='building'))
         create_platform_fee_for_task(t11, t11.final_job_value)
 
+        # Every Task/Quote/PlatformFee/Invoice/Review above was created via
+        # direct .objects.create() calls (not the real views/utils write
+        # paths), so none of them got their new workspace FK populated —
+        # backfill them the same way a production migration would, rather
+        # than hand-editing every creation call above.
+        self.stdout.write('Linking workspace ownership…')
+        call_command('audit_workspace_relationships', repair=True)
+
     def _make_tradie(self, email, first, last, town, mobile,
                      biz='', tin='', exp='', bio='', trades=None, service_towns=None):
         user, created = User.objects.get_or_create(
@@ -788,6 +799,9 @@ class Command(BaseCommand):
                 trades=trades or [], service_towns=service_towns or [],
             ),
         )
+        workspaces.ensure_user_capability(user, can_offer_services=True)
+        workspaces.create_client_workspace(user)
+        workspaces.create_individual_provider_workspace(user)
         if created:
             self.stdout.write(f'  Created tradie: {user}')
         return user
@@ -804,4 +818,6 @@ class Command(BaseCommand):
             user.set_password(PASSWORD)
             user.save()
             self.stdout.write(f'  Created client: {user}')
+        workspaces.ensure_user_capability(user)
+        workspaces.create_client_workspace(user)
         return user

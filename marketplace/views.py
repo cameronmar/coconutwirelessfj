@@ -81,6 +81,7 @@ from .models import (
     TradieProfile,
     User,
 )
+from . import workspaces
 from .utils import (
     calculate_market_price_per_unit,
     calculate_market_take_home,
@@ -760,6 +761,7 @@ def post_task(request):
     if request.method == 'POST' and form.is_valid():
         task = form.save(commit=False)
         task.client = request.user
+        task.client_workspace = workspaces.resolve_client_workspace_for_write(request.user, 'post_task')
         task.save()
         form.save_m2m()
         notify_matching_tradies_new_job(task)
@@ -926,6 +928,7 @@ def submit_quote(request, pk):
         q = form.save(commit=False)
         q.task   = task
         q.tradie = request.user
+        q.provider_workspace = workspaces.resolve_individual_provider_workspace_for_write(request.user, 'submit_quote')
         q.customer_facing_quote = q.price
         q.client_quote_total = q.price
         q.minimum_take_home_amount = form.cleaned_data.get('minimum_take_home_amount')
@@ -1186,6 +1189,7 @@ def accept_quote(request, pk, qpk):
     quote.save()
     task.status          = Task.STATUS_ASSIGNED
     task.assigned_tradie = quote.tradie
+    task.assigned_provider_workspace = quote.provider_workspace
     task.save()
     flash.success(request, f'Quote accepted! {quote.tradie.first_name} is assigned.')
     return redirect('task_detail', pk=pk)
@@ -1228,6 +1232,8 @@ def rate_tradie(request, pk):
             task=task,
             rater=request.user,
             ratee=task.assigned_tradie,
+            reviewer_workspace=workspaces.resolve_client_workspace_for_write(request.user, 'rate_tradie:reviewer'),
+            reviewed_workspace=workspaces.resolve_individual_provider_workspace_for_write(task.assigned_tradie, 'rate_tradie:reviewed'),
             reliability_punctuality   = int(cd['reliability_punctuality']),
             quote_price_accuracy      = int(cd['quote_price_accuracy']),
             value_for_money           = int(cd['value_for_money']),
@@ -1264,6 +1270,8 @@ def rate_client(request, pk):
             task=task,
             rater=request.user,
             ratee=task.client,
+            reviewer_workspace=workspaces.resolve_individual_provider_workspace_for_write(request.user, 'rate_client:reviewer'),
+            reviewed_workspace=workspaces.resolve_client_workspace_for_write(task.client, 'rate_client:reviewed'),
             access_readiness = int(cd['access_readiness']),
             scope_clarity    = int(cd['scope_clarity']),
             communication    = int(cd['communication']),

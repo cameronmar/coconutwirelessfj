@@ -5,6 +5,7 @@ from django.core.cache import cache
 from django.core.exceptions import ValidationError
 from django.core.validators import MinValueValidator, MaxValueValidator
 from django.db import models
+from django.utils.text import slugify
 
 from .constants import TOWN_CHOICES, EXPERIENCE_CHOICES
 from .managers import PublicReviewManager, PrivateReviewManager
@@ -273,6 +274,187 @@ class TradieProfile(models.Model):
         return breakdown
 
 
+# ── Workspaces (multi-workspace accounts) ────────────────────────────────────
+# One human User may operate a client workspace, an individual-provider
+# workspace, and/or any number of business workspaces — see
+# marketplace/workspaces.py for the session-based active-workspace helpers and
+# the create_*_workspace()/get_*_workspace() functions used throughout this
+# file's write paths. Existing legacy User FKs (Task.client, Quote.tradie,
+# etc.) remain the source of truth for now; the *_workspace FKs added further
+# below are additive and populated alongside them (see
+# audit_workspace_relationships for consistency checking).
+
+class UserCapability(models.Model):
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='capabilities')
+
+    can_hire               = models.BooleanField(default=True)
+    can_offer_services     = models.BooleanField(default=False)
+    can_manage_businesses  = models.BooleanField(default=False)
+
+    phone_verified         = models.BooleanField(default=False)
+    onboarding_completed   = models.BooleanField(default=False)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'User Capability'
+        verbose_name_plural = 'User Capabilities'
+
+    def __str__(self):
+        return f'Capabilities – {self.user}'
+
+
+class Workspace(models.Model):
+    TYPE_CLIENT = 'client'
+    TYPE_INDIVIDUAL_PROVIDER = 'individual_provider'
+    TYPE_BUSINESS = 'business'
+    WORKSPACE_TYPES = [
+        (TYPE_CLIENT,              'Hire Someone'),
+        (TYPE_INDIVIDUAL_PROVIDER, 'Find Work'),
+        (TYPE_BUSINESS,            'Manage Business'),
+    ]
+
+    owner = models.ForeignKey(User, on_delete=models.CASCADE, related_name='owned_workspaces')
+
+    workspace_type = models.CharField(max_length=30, choices=WORKSPACE_TYPES, db_index=True)
+    display_name   = models.CharField(max_length=160)
+    slug           = models.SlugField(max_length=220, unique=True, editable=False)
+    profile_image  = models.ImageField(upload_to='workspace_profiles/', blank=True, null=True)
+    active         = models.BooleanField(default=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['workspace_type', 'display_name']
+        verbose_name = 'Workspace'
+        verbose_name_plural = 'Workspaces'
+        constraints = [
+            # A brand-new, currently-empty table — safe to apply these
+            # constraints immediately rather than staging them into a later
+            # migration the way the spec does for pre-existing dual-FK
+            # tables (nothing here can already violate them).
+            models.UniqueConstraint(
+                fields=['owner', 'workspace_type'],
+                condition=models.Q(workspace_type='client'),
+                name='unique_client_workspace_per_user',
+            ),
+            models.UniqueConstraint(
+                fields=['owner', 'workspace_type'],
+                condition=models.Q(workspace_type='individual_provider'),
+                name='unique_individual_provider_workspace_per_user',
+            ),
+        ]
+
+    def __str__(self):
+        return f'{self.display_name} ({self.get_workspace_type_display()})'
+
+    def save(self, *args, **kwargs):
+        """
+        Auto-generate a unique slug on first save if one wasn't already set.
+        `slug` is editable=False (never shown/settable via a form, including
+        the admin), so without this, anything that creates a Workspace
+        outside marketplace/workspaces.py's create_*_workspace() helpers —
+        the Django admin's "Add Workspace" page, the shell, a future script —
+        would insert a blank slug: harmless for the first row, then a raw
+        IntegrityError (duplicate blank slug) on every one after it. This is
+        the single source of truth for slug generation; workspaces.py's
+        generate_unique_workspace_slug() is a preview-only helper that
+        computes but doesn't reserve one.
+        """
+        if not self.slug:
+            base = slugify(self.display_name) or 'workspace'
+            candidate = base
+            suffix = 2
+            while Workspace.objects.filter(slug=candidate).exclude(pk=self.pk).exists():
+                candidate = f'{base}-{suffix}'
+                suffix += 1
+            self.slug = candidate
+        super().save(*args, **kwargs)
+
+
+class WorkspaceMembership(models.Model):
+    ROLE_OWNER   = 'owner'
+    ROLE_MANAGER = 'manager'
+    ROLE_STAFF   = 'staff'
+    ROLE_CHOICES = [
+        (ROLE_OWNER,   'Owner'),
+        (ROLE_MANAGER, 'Manager'),
+        (ROLE_STAFF,   'Staff'),
+    ]
+
+    workspace = models.ForeignKey(Workspace, on_delete=models.CASCADE, related_name='memberships')
+    user      = models.ForeignKey(User, on_delete=models.CASCADE, related_name='workspace_memberships')
+    role      = models.CharField(max_length=20, choices=ROLE_CHOICES)
+    active     = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = 'Workspace Membership'
+        verbose_name_plural = 'Workspace Memberships'
+        constraints = [
+            models.UniqueConstraint(fields=['workspace', 'user'], name='unique_workspace_membership'),
+        ]
+
+    def __str__(self):
+        return f'{self.user} – {self.get_role_display()} of {self.workspace}'
+
+
+class BusinessProfile(models.Model):
+    """Only valid on a Workspace of type TYPE_BUSINESS — see clean()."""
+    VERIFICATION_NOT_SUBMITTED = 'not_submitted'
+    VERIFICATION_PENDING   = 'pending'
+    VERIFICATION_APPROVED  = 'approved'
+    VERIFICATION_REJECTED  = 'rejected'
+    VERIFICATION_SUSPENDED = 'suspended'
+    VERIFICATION_STATUSES = [
+        (VERIFICATION_NOT_SUBMITTED, 'Not Submitted'),
+        (VERIFICATION_PENDING,       'Pending'),
+        (VERIFICATION_APPROVED,      'Approved'),
+        (VERIFICATION_REJECTED,      'Rejected'),
+        (VERIFICATION_SUSPENDED,     'Suspended'),
+    ]
+
+    workspace = models.OneToOneField(Workspace, on_delete=models.CASCADE, related_name='business_profile')
+
+    legal_name            = models.CharField(max_length=200, blank=True)
+    trading_name          = models.CharField(max_length=200)
+    business_description  = models.TextField(blank=True)
+
+    business_phone = models.CharField(max_length=30, blank=True)
+    business_email = models.EmailField(blank=True)
+
+    town               = models.CharField(max_length=100, blank=True)
+    service_radius_km  = models.PositiveIntegerField(default=10)
+
+    # Fiji-specific business identifiers — deliberately not Australian terms.
+    tin                                = models.CharField(max_length=50, blank=True, verbose_name='TIN')
+    fiji_business_registration_number  = models.CharField(max_length=100, blank=True, verbose_name='Fiji business registration number')
+    fiji_trade_licence_number          = models.CharField(max_length=100, blank=True, verbose_name='Fiji trade or professional licence number')
+
+    facebook_page_url = models.URLField(blank=True)
+    facebook_page_id  = models.CharField(max_length=100, blank=True, db_index=True)
+
+    verification_status = models.CharField(max_length=30, choices=VERIFICATION_STATUSES, default=VERIFICATION_NOT_SUBMITTED)
+    verified_at          = models.DateTimeField(blank=True, null=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'Business Profile'
+        verbose_name_plural = 'Business Profiles'
+
+    def __str__(self):
+        return f'{self.trading_name} ({self.workspace})'
+
+    def clean(self):
+        if self.workspace_id and self.workspace.workspace_type != Workspace.TYPE_BUSINESS:
+            raise ValidationError({'workspace': 'A business profile can only be attached to a business workspace.'})
+
+
 # ── Task ──────────────────────────────────────────────────────────────────────
 
 class TradeCategory(models.Model):
@@ -366,6 +548,15 @@ class Task(models.Model):
     status          = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_OPEN, db_index=True)
     assigned_tradie = models.ForeignKey(
         User, on_delete=models.SET_NULL, null=True, blank=True, related_name='assigned_tasks'
+    )
+    # Workspace-scoped mirrors of client/assigned_tradie above — see the
+    # module docstring near Workspace. owner must match client/assigned_tradie
+    # respectively (enforced in clean(), not in save() — see Workspace notes).
+    client_workspace = models.ForeignKey(
+        'Workspace', on_delete=models.PROTECT, null=True, blank=True, related_name='posted_tasks',
+    )
+    assigned_provider_workspace = models.ForeignKey(
+        'Workspace', on_delete=models.PROTECT, null=True, blank=True, related_name='assigned_tasks',
     )
     # New task quality fields
     materials_required  = models.CharField(max_length=50, blank=True, choices=[
@@ -484,6 +675,17 @@ class Task(models.Model):
                         'task removed before quote acceptance or completion.'
                     )
 
+    def clean(self):
+        if self.client_workspace_id and self.client_id and self.client_workspace.owner_id != self.client_id:
+            raise ValidationError({'client_workspace': 'Client workspace must belong to the task client.'})
+        if (
+            self.assigned_provider_workspace_id and self.assigned_tradie_id
+            and self.assigned_provider_workspace.owner_id != self.assigned_tradie_id
+        ):
+            raise ValidationError({
+                'assigned_provider_workspace': 'Assigned provider workspace must belong to the assigned tradie.',
+            })
+
     def save(self, *args, **kwargs):
         self.flag_backdoor_monitoring()
         super().save(*args, **kwargs)
@@ -503,6 +705,9 @@ class Quote(models.Model):
 
     task                            = models.ForeignKey(Task, on_delete=models.CASCADE, related_name='quotes')
     tradie                          = models.ForeignKey(User, on_delete=models.CASCADE, related_name='quotes')
+    provider_workspace              = models.ForeignKey(
+        'Workspace', on_delete=models.PROTECT, null=True, blank=True, related_name='submitted_quotes',
+    )
     price                           = models.DecimalField(max_digits=10, decimal_places=2)
     message                         = models.TextField()
     status                          = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING, db_index=True)
@@ -551,6 +756,13 @@ class Quote(models.Model):
 
     def __str__(self):
         return f'Quote by {self.tradie} on "{self.task}" – FJD ${self.price}'
+
+    def clean(self):
+        if (
+            self.provider_workspace_id and self.tradie_id
+            and self.provider_workspace.owner_id != self.tradie_id
+        ):
+            raise ValidationError({'provider_workspace': 'Provider workspace must belong to the quoting tradie.'})
 
 
 # ── Message ───────────────────────────────────────────────────────────────────
@@ -672,6 +884,14 @@ class PublicReview(models.Model):
     task               = models.ForeignKey(Task, on_delete=models.CASCADE, related_name='public_reviews', null=True, blank=True)
     rater              = models.ForeignKey(User, on_delete=models.CASCADE, related_name='public_reviews_given')
     ratee              = models.ForeignKey(User, on_delete=models.CASCADE, related_name='public_reviews_received')
+    # reviewer_workspace = rater's client workspace; reviewed_workspace = ratee's
+    # provider workspace — PublicReview is always client -> tradie.
+    reviewer_workspace = models.ForeignKey(
+        'Workspace', on_delete=models.PROTECT, null=True, blank=True, related_name='public_reviews_written',
+    )
+    reviewed_workspace = models.ForeignKey(
+        'Workspace', on_delete=models.PROTECT, null=True, blank=True, related_name='public_reviews_received',
+    )
     # Six public rating criteria for all service providers.
     reliability_punctuality   = models.IntegerField(choices=SCORE_CHOICES, validators=SCORE_VALIDATORS)
     quote_price_accuracy      = models.IntegerField(choices=SCORE_CHOICES, validators=SCORE_VALIDATORS)
@@ -697,6 +917,12 @@ class PublicReview(models.Model):
     def __str__(self):
         return f'Review by {self.rater} for {self.ratee} on "{self.task}"'
 
+    def clean(self):
+        if self.reviewer_workspace_id and self.rater_id and self.reviewer_workspace.owner_id != self.rater_id:
+            raise ValidationError({'reviewer_workspace': 'Reviewer workspace must belong to the rater.'})
+        if self.reviewed_workspace_id and self.ratee_id and self.reviewed_workspace.owner_id != self.ratee_id:
+            raise ValidationError({'reviewed_workspace': 'Reviewed workspace must belong to the ratee.'})
+
     @property
     def overall(self):
         """Compute overall rating from six public criteria (not stored)."""
@@ -717,6 +943,14 @@ class PrivateReview(models.Model):
     task            = models.ForeignKey(Task, on_delete=models.CASCADE, related_name='private_reviews')
     rater           = models.ForeignKey(User, on_delete=models.CASCADE, related_name='private_reviews_given')
     ratee           = models.ForeignKey(User, on_delete=models.CASCADE, related_name='private_reviews_received')
+    # reviewer_workspace = rater's provider workspace; reviewed_workspace = ratee's
+    # client workspace — PrivateReview is always tradie -> client.
+    reviewer_workspace = models.ForeignKey(
+        'Workspace', on_delete=models.PROTECT, null=True, blank=True, related_name='private_reviews_written',
+    )
+    reviewed_workspace = models.ForeignKey(
+        'Workspace', on_delete=models.PROTECT, null=True, blank=True, related_name='private_reviews_received',
+    )
     # Five private criteria
     access_readiness = models.IntegerField(choices=SCORE_CHOICES, validators=SCORE_VALIDATORS)
     scope_clarity    = models.IntegerField(choices=SCORE_CHOICES, validators=SCORE_VALIDATORS)
@@ -735,6 +969,12 @@ class PrivateReview(models.Model):
 
     def __str__(self):
         return f'[PRIVATE] {self.rater} rated client {self.ratee} on "{self.task}"'
+
+    def clean(self):
+        if self.reviewer_workspace_id and self.rater_id and self.reviewer_workspace.owner_id != self.rater_id:
+            raise ValidationError({'reviewer_workspace': 'Reviewer workspace must belong to the rater.'})
+        if self.reviewed_workspace_id and self.ratee_id and self.reviewed_workspace.owner_id != self.ratee_id:
+            raise ValidationError({'reviewed_workspace': 'Reviewed workspace must belong to the ratee.'})
 
 
 # ── Task Photos ───────────────────────────────────────────────────────────────
@@ -890,6 +1130,9 @@ class PlatformFee(models.Model):
 
     task               = models.ForeignKey(Task, on_delete=models.CASCADE, related_name='platform_fees')
     tradie             = models.ForeignKey(User, on_delete=models.CASCADE, related_name='platform_fees')
+    provider_workspace = models.ForeignKey(
+        'Workspace', on_delete=models.PROTECT, null=True, blank=True, related_name='platform_fees',
+    )
     final_job_value    = models.DecimalField(max_digits=10, decimal_places=2)
     fee_rate           = models.DecimalField(max_digits=5, decimal_places=2)  # Stored for audit trail
     fee_cap            = models.DecimalField(max_digits=10, decimal_places=2)  # Stored for audit trail
@@ -906,6 +1149,13 @@ class PlatformFee(models.Model):
 
     def __str__(self):
         return f'Fee: FJD ${self.fee_amount} on task "{self.task}" ({self.status})'
+
+    def clean(self):
+        if (
+            self.provider_workspace_id and self.tradie_id
+            and self.provider_workspace.owner_id != self.tradie_id
+        ):
+            raise ValidationError({'provider_workspace': 'Provider workspace must belong to the fee tradie.'})
 
 
 # ── Invoice ───────────────────────────────────────────────────────────────────
@@ -925,6 +1175,9 @@ class Invoice(models.Model):
     ]
 
     tradie          = models.ForeignKey(User, on_delete=models.CASCADE, related_name='invoices')
+    provider_workspace = models.ForeignKey(
+        'Workspace', on_delete=models.PROTECT, null=True, blank=True, related_name='invoices',
+    )
     invoice_number  = models.CharField(max_length=50, unique=True)
     period_start    = models.DateField(null=True, blank=True)
     period_end      = models.DateField(null=True, blank=True)
@@ -942,6 +1195,13 @@ class Invoice(models.Model):
 
     def __str__(self):
         return f'Invoice {self.invoice_number} – {self.tradie} – FJD ${self.total_amount}'
+
+    def clean(self):
+        if (
+            self.provider_workspace_id and self.tradie_id
+            and self.provider_workspace.owner_id != self.tradie_id
+        ):
+            raise ValidationError({'provider_workspace': 'Provider workspace must belong to the invoice tradie.'})
 
     @property
     def is_overdue(self):

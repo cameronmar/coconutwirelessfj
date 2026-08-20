@@ -9,6 +9,7 @@ from django.db import transaction
 
 from .constants import TOWN_CHOICES, EXPERIENCE_CHOICES, FOUNDING_MEMBER_SLOTS, FOUNDING_MEMBER_CREDIT
 from .models import User, TradieProfile, Task, Quote, Message, TradeCategory, TaskPhoto, MarketListing, MarketOrder, PlatformSettings, SupplyCategory, SupplierProfile, ContentReport
+from . import workspaces
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -92,15 +93,19 @@ class ClientRegistrationForm(forms.Form):
 
     def save(self):
         cd = self.cleaned_data
-        return User.objects.create_user(
-            email=cd['email'],
-            password=cd['password'],
-            first_name=cd['first_name'],
-            last_name=cd['last_name'],
-            mobile=cd['mobile'],
-            town=cd['town'],
-            role=User.ROLE_CLIENT,
-        )
+        with transaction.atomic():
+            user = User.objects.create_user(
+                email=cd['email'],
+                password=cd['password'],
+                first_name=cd['first_name'],
+                last_name=cd['last_name'],
+                mobile=cd['mobile'],
+                town=cd['town'],
+                role=User.ROLE_CLIENT,
+            )
+            workspaces.ensure_user_capability(user)
+            workspaces.create_client_workspace(user)
+        return user
 
 
 class TradieRegistrationForm(forms.Form):
@@ -206,6 +211,9 @@ class TradieRegistrationForm(forms.Form):
                 if cd.get(field):
                     setattr(profile, field, cd[field])
             profile.save()
+            workspaces.ensure_user_capability(user, can_offer_services=True)
+            workspaces.create_client_workspace(user)
+            workspaces.create_individual_provider_workspace(user)
         return user
 
 
