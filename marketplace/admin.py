@@ -52,6 +52,7 @@ from .models import (
     Workspace,
     WorkspaceMembership,
     BusinessProfile,
+    LinkedAccount,
 )
 from . import workspaces
 from .utils import (
@@ -363,6 +364,15 @@ class BusinessProfileAdmin(admin.ModelAdmin):
         ('Verification', {'fields': ('verification_status', 'verified_at')}),
         ('Timestamps', {'fields': ('created_at', 'updated_at')}),
     )
+
+
+@admin.register(LinkedAccount)
+class LinkedAccountAdmin(admin.ModelAdmin):
+    list_display  = ['user_a', 'user_b', 'created_at']
+    list_select_related = ['user_a', 'user_b']
+    search_fields = ['user_a__email', 'user_b__email']
+    raw_id_fields = ['user_a', 'user_b']
+    readonly_fields = ['created_at']
 
 
 # ── Task ──────────────────────────────────────────────────────────────────────

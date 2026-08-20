@@ -1,0 +1,40 @@
+{% extends "marketplace/base.html" %}
+{% block title %}Merge an Existing Account – The Coconut Wireless Network{% endblock %}
+
+{% block extra_css %}
+<style>
+.settings-page{max-width:600px;margin:0 auto;padding:28px 20px 50px;}
+.page-title{font-size:1.4rem;font-weight:700;margin:0 0 4px;}
+.page-sub{color:var(--muted);font-size:.9rem;margin:0 0 22px;}
+.info-band{background:var(--blue-light);border-radius:12px;padding:13px 16px;font-size:.87rem;color:var(--blue-dark);margin-bottom:22px;line-height:1.55;}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="settings-page">
+  <div class="page-title">Merge an existing account</div>
+  <p class="page-sub">Prove you own the other account, and we'll link it to this one.</p>
+
+  <div class="info-band">
+    This links the accounts so either login reaches both — it does not combine their contact details; each keeps its own email and phone. Once linked, switching between them takes one click, no need to log in again.
+  </div>
+
+  <div class="card">
+    <form method="post">
+      {% csrf_token %}
+      <div class="field">
+        <label>{{ form.email.label }}</label>
+        {{ form.email }}
+        {% for e in form.email.errors %}<div class="field-error">{{e}}</div>{% endfor %}
+      </div>
+      <div class="field">
+        <label>{{ form.password.label }}</label>
+        {{ form.password }}
+        {% for e in form.password.errors %}<div class="field-error">{{e}}</div>{% endfor %}
+      </div>
+      {% if form.non_field_errors %}<div class="field-error" style="margin-bottom:12px;">{{ form.non_field_errors }}</div>{% endif %}
+      <button type="submit" class="btn btn-primary" style="width:100%;padding:13px;">Link accounts</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

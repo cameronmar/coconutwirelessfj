@@ -308,10 +308,12 @@ class UserCapability(models.Model):
 class Workspace(models.Model):
     TYPE_CLIENT = 'client'
     TYPE_INDIVIDUAL_PROVIDER = 'individual_provider'
+    TYPE_SUPPLIER = 'supplier'
     TYPE_BUSINESS = 'business'
     WORKSPACE_TYPES = [
         (TYPE_CLIENT,              'Hire Someone'),
         (TYPE_INDIVIDUAL_PROVIDER, 'Find Work'),
+        (TYPE_SUPPLIER,            'Sell Supplies'),
         (TYPE_BUSINESS,            'Manage Business'),
     ]
 
@@ -344,6 +346,11 @@ class Workspace(models.Model):
                 fields=['owner', 'workspace_type'],
                 condition=models.Q(workspace_type='individual_provider'),
                 name='unique_individual_provider_workspace_per_user',
+            ),
+            models.UniqueConstraint(
+                fields=['owner', 'workspace_type'],
+                condition=models.Q(workspace_type='supplier'),
+                name='unique_supplier_workspace_per_user',
             ),
         ]
 
@@ -453,6 +460,34 @@ class BusinessProfile(models.Model):
     def clean(self):
         if self.workspace_id and self.workspace.workspace_type != Workspace.TYPE_BUSINESS:
             raise ValidationError({'workspace': 'A business profile can only be attached to a business workspace.'})
+
+
+class LinkedAccount(models.Model):
+    """Two User rows proven (via account-merge) to be the same real person.
+    Stored once per pair with user_a.pk < user_b.pk (enforced in
+    workspaces.link_accounts(), not here) to avoid duplicate reverse rows.
+    workspaces.get_linked_users() takes the transitive closure over these
+    edges, so chained merges (A-B, then separately B-C) produce a 3-way
+    group without needing a separate group-id table.
+
+    Deliberately NOT the same thing as WorkspaceMembership, which means
+    "has staff/manager access to a business workspace" — a weaker,
+    different relationship that will diverge once real multi-staff business
+    workspaces exist. This model means "same person, either login reaches
+    both" and is used only to compute the tab-switch allow-list."""
+    user_a = models.ForeignKey(User, on_delete=models.CASCADE, related_name='+')
+    user_b = models.ForeignKey(User, on_delete=models.CASCADE, related_name='+')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = 'Linked Account'
+        verbose_name_plural = 'Linked Accounts'
+        constraints = [
+            models.UniqueConstraint(fields=['user_a', 'user_b'], name='unique_linked_account_pair'),
+        ]
+
+    def __str__(self):
+        return f'{self.user_a} ↔ {self.user_b}'
 
 
 # ── Task ──────────────────────────────────────────────────────────────────────

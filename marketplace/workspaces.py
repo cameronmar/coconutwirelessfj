@@ -15,9 +15,10 @@ flag.
 import logging
 
 from django.db import IntegrityError, transaction
+from django.db.models import Q
 from django.utils.text import slugify
 
-from .models import UserCapability, Workspace, WorkspaceMembership
+from .models import LinkedAccount, User, UserCapability, Workspace, WorkspaceMembership
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +115,15 @@ def create_individual_provider_workspace(user):
     return _create_workspace(user, Workspace.TYPE_INDIVIDUAL_PROVIDER, display_name)
 
 
+def create_supplier_workspace(user):
+    """Idempotent: returns the existing supplier workspace if one already exists."""
+    existing = get_supplier_workspace(user)
+    if existing:
+        return existing
+    display_name = user.full_name or user.email
+    return _create_workspace(user, Workspace.TYPE_SUPPLIER, display_name)
+
+
 def get_client_workspace(user):
     """
     Returns the user's client Workspace, or None. Deliberately non-raising:
@@ -131,6 +141,13 @@ def get_individual_provider_workspace(user):
     if not user or not user.is_authenticated:
         return None
     return user.owned_workspaces.filter(workspace_type=Workspace.TYPE_INDIVIDUAL_PROVIDER).first()
+
+
+def get_supplier_workspace(user):
+    """See get_client_workspace — same non-raising contract."""
+    if not user or not user.is_authenticated:
+        return None
+    return user.owned_workspaces.filter(workspace_type=Workspace.TYPE_SUPPLIER).first()
 
 
 def resolve_client_workspace_for_write(user, context):
@@ -154,6 +171,14 @@ def resolve_individual_provider_workspace_for_write(user, context):
     workspace = get_individual_provider_workspace(user)
     if workspace is None and user is not None:
         logger.warning('workspace-link-gap: no individual_provider workspace for user_id=%s (%s)', user.pk, context)
+    return workspace
+
+
+def resolve_supplier_workspace_for_write(user, context):
+    """See resolve_client_workspace_for_write — same rationale, supplier side."""
+    workspace = get_supplier_workspace(user)
+    if workspace is None and user is not None:
+        logger.warning('workspace-link-gap: no supplier workspace for user_id=%s (%s)', user.pk, context)
     return workspace
 
 
@@ -222,3 +247,127 @@ def set_active_workspace(request, workspace_id):
         return None
     request.session[SESSION_KEY] = workspace.id
     return workspace
+
+
+# ── Multi-role accounts & account linking ───────────────────────────────────
+#
+# User.role stays single-valued and means "currently active role" — every
+# existing role-gated view/template keeps working unmodified. These
+# functions are the only things that change it, and the only things that
+# decide which OTHER User rows (proven the same person via account-merge)
+# a request may switch its session identity to.
+
+_ROLE_WORKSPACE_GETTERS = {
+    User.ROLE_CLIENT: get_client_workspace,
+    User.ROLE_TRADIE: get_individual_provider_workspace,
+    User.ROLE_SUPPLIER: get_supplier_workspace,
+}
+
+_ROLE_LABELS = {
+    User.ROLE_CLIENT: 'Client',
+    User.ROLE_TRADIE: 'Local Pro',
+    User.ROLE_SUPPLIER: 'Supplier',
+}
+
+
+def get_own_available_roles(user):
+    """
+    Roles this user can switch into on their OWN row (a User.role flip, no
+    session-identity change) — profiles/workspaces they personally hold.
+    Client is only included if a client workspace actually exists rather
+    than assumed present: true for every tradie (create_client_workspace is
+    called from TradieRegistrationForm.save()) and now every supplier too,
+    but wasn't historically true for suppliers before that fix landed, so
+    this checks reality rather than hard-coding an assumption.
+    """
+    if not user or not user.is_authenticated:
+        return []
+    roles = []
+    if get_client_workspace(user):
+        roles.append(User.ROLE_CLIENT)
+    if hasattr(user, 'tradie_profile'):
+        roles.append(User.ROLE_TRADIE)
+    if hasattr(user, 'supplier_profile'):
+        roles.append(User.ROLE_SUPPLIER)
+    return roles
+
+
+def switch_own_role(request, role):
+    """
+    Flip request.user.role to one of their OWN available roles and sync the
+    session's active workspace to match — the one place User.role is ever
+    changed after registration. Returns True on success, False if `role`
+    isn't actually available to this user; callers must not trust a
+    browser-submitted role without checking this return value.
+    """
+    user = request.user
+    if role not in get_own_available_roles(user):
+        return False
+    if user.role != role:
+        user.role = role
+        user.save(update_fields=['role'])
+    workspace = _ROLE_WORKSPACE_GETTERS[role](user)
+    if workspace:
+        set_active_workspace(request, workspace.id)
+    return True
+
+
+def link_accounts(user_a, user_b):
+    """
+    Record that user_a and user_b are the same person. This function trusts
+    its caller completely and performs no verification of its own — the
+    account-merge view must have already re-checked the target's password
+    before calling this. Idempotent and order-independent: always stores
+    the pair as (lower pk, higher pk) so linking A-then-B or B-then-A
+    produces the same row.
+    """
+    lo, hi = sorted([user_a, user_b], key=lambda u: u.pk)
+    with transaction.atomic():
+        link, _created = LinkedAccount.objects.get_or_create(user_a=lo, user_b=hi)
+    return link
+
+
+def get_linked_users(user):
+    """
+    Transitive closure over LinkedAccount edges, always including `user`
+    itself. These graphs are small (a handful of merged accounts per person
+    at most), so plain BFS is fine — no need for a recursive CTE.
+    """
+    if not user or not user.is_authenticated:
+        return []
+    seen = {user.pk: user}
+    frontier = [user.pk]
+    while frontier:
+        edges = LinkedAccount.objects.filter(
+            Q(user_a_id__in=frontier) | Q(user_b_id__in=frontier)
+        ).select_related('user_a', 'user_b')
+        next_frontier = []
+        for edge in edges:
+            for candidate in (edge.user_a, edge.user_b):
+                if candidate.pk not in seen:
+                    seen[candidate.pk] = candidate
+                    next_frontier.append(candidate.pk)
+        frontier = next_frontier
+    return list(seen.values())
+
+
+def get_role_tabs(user):
+    """
+    One tab per (linked user, role they can act as) — the data a shared
+    dashboard tab-bar renders. Each tab identifies which User row and which
+    role switching to it requires; views.switch_tab performs the actual
+    session-identity swap + role flip. is_current marks the tab matching
+    the request's current identity+role.
+    """
+    if not user or not user.is_authenticated:
+        return []
+    tabs = []
+    for linked_user in get_linked_users(user):
+        for role in get_own_available_roles(linked_user):
+            tabs.append({
+                'user_id': linked_user.pk,
+                'role': role,
+                'label': _ROLE_LABELS.get(role, role),
+                'is_current': linked_user.pk == user.pk and role == user.role,
+            })
+    return tabs

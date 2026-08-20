@@ -21,6 +21,7 @@ from .models import (
     ContentReport,
     Invoice,
     InvoiceLine,
+    LinkedAccount,
     MarketListing,
     MarketOrder,
     Message,
@@ -3449,3 +3450,453 @@ class AuditWorkspaceRelationshipsCommandTests(TestCase):
         self.assertIn('mismatched=1', output)
         self.task.refresh_from_db()
         self.assertEqual(self.task.client_workspace_id, other_ws.id)
+
+
+# ── Multi-role accounts & account linking ────────────────────────────────────
+
+class MultiRoleAccountTests(TestCase):
+    """get_own_available_roles/switch_own_role — the mechanism that lets
+    User.role act as 'currently active role' for a multi-profile account."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email='multirole@example.com', password='p',
+            first_name='Multi', last_name='Role', role=User.ROLE_CLIENT, town='Suva',
+        )
+        workspaces.create_client_workspace(self.user)
+
+    def test_client_only_user_has_only_client_available(self):
+        self.assertEqual(workspaces.get_own_available_roles(self.user), [User.ROLE_CLIENT])
+
+    def test_tradie_profile_adds_tradie_role(self):
+        TradieProfile.objects.create(user=self.user, trades=['cleaning'], service_towns=['Suva'])
+        self.assertIn(User.ROLE_TRADIE, workspaces.get_own_available_roles(self.user))
+
+    def test_supplier_profile_adds_supplier_role(self):
+        SupplierProfile.objects.create(user=self.user, supply_categories=['building-materials'], service_towns=['Suva'])
+        self.assertIn(User.ROLE_SUPPLIER, workspaces.get_own_available_roles(self.user))
+
+    def test_switch_own_role_rejects_unavailable_role(self):
+        request = _request_with_session(self.user)
+        self.assertFalse(workspaces.switch_own_role(request, User.ROLE_TRADIE))
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.role, User.ROLE_CLIENT)
+
+    def test_switch_own_role_flips_role_and_active_workspace(self):
+        TradieProfile.objects.create(user=self.user, trades=['cleaning'], service_towns=['Suva'])
+        provider_ws = workspaces.create_individual_provider_workspace(self.user)
+        request = _request_with_session(self.user)
+        self.assertTrue(workspaces.switch_own_role(request, User.ROLE_TRADIE))
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.role, User.ROLE_TRADIE)
+        self.assertEqual(request.session[workspaces.SESSION_KEY], provider_ws.id)
+
+
+@override_settings(
+    STORAGES={
+        'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
+        'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
+    }
+)
+class AddRoleFormTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email='addrole@example.com', password='pass12345',
+            first_name='Add', last_name='Role', role=User.ROLE_CLIENT, town='Suva',
+        )
+        workspaces.create_client_workspace(self.user)
+
+    def _base_tradie_data(self, **overrides):
+        data = {
+            'email': self.user.email, 'use_same_credentials': 'on', 'password': 'pass12345',
+            'business_name': '', 'tin': '', 'years_experience': '1-3 years', 'bio': 'Bio',
+            'trades': ['cleaning'], 'service_towns': ['Suva'],
+            'accepted_platform_circumvention': 'on', 'accepted_invoicing_terms': 'on',
+        }
+        data.update(overrides)
+        return data
+
+    def test_wrong_password_rejected(self):
+        from .forms import AddTradieRoleForm
+        form = AddTradieRoleForm(
+            data=self._base_tradie_data(password='wrong'),
+            files={'tin_letter': SimpleUploadedFile('tin.pdf', b'%PDF-1.4', content_type='application/pdf')},
+            user=self.user,
+        )
+        self.assertFalse(form.is_valid())
+        self.assertIn('password', form.errors)
+
+    def test_mismatched_email_rejected_regardless_of_checkbox(self):
+        from .forms import AddTradieRoleForm
+        form = AddTradieRoleForm(
+            data=self._base_tradie_data(email='someone-else@example.com', use_same_credentials=''),
+            files={'tin_letter': SimpleUploadedFile('tin.pdf', b'%PDF-1.4', content_type='application/pdf')},
+            user=self.user,
+        )
+        self.assertFalse(form.is_valid())
+        self.assertIn('email', form.errors)
+
+    def test_missing_tin_letter_and_no_reuse_available_is_rejected(self):
+        from .forms import AddTradieRoleForm
+        form = AddTradieRoleForm(data=self._base_tradie_data(), files={}, user=self.user)
+        self.assertFalse(form.is_valid())
+        self.assertIn('tin_letter', form.errors)
+
+    def test_happy_path_creates_profile_and_workspace(self):
+        from .forms import AddTradieRoleForm
+        form = AddTradieRoleForm(
+            data=self._base_tradie_data(),
+            files={'tin_letter': SimpleUploadedFile('tin.pdf', b'%PDF-1.4', content_type='application/pdf')},
+            user=self.user,
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        form.save()
+        self.assertTrue(hasattr(self.user, 'tradie_profile'))
+        self.assertIsNotNone(workspaces.get_individual_provider_workspace(self.user))
+        self.assertIsNotNone(workspaces.get_client_workspace(self.user))
+
+    def test_reuses_tin_letter_from_supplier_profile_without_mutating_it(self):
+        from .forms import AddTradieRoleForm
+        SupplierProfile.objects.create(
+            user=self.user, supply_categories=['building-materials'], service_towns=['Suva'],
+            tin_letter=SimpleUploadedFile('supplier-tin.pdf', b'%PDF-1.4 supplier', content_type='application/pdf'),
+        )
+        form = AddTradieRoleForm(data=self._base_tradie_data(), files={}, user=self.user)
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertTrue(form.reused_tin_letter)
+        form.save()
+        self.assertTrue(self.user.tradie_profile.tin_letter)
+        self.user.supplier_profile.refresh_from_db()
+        self.assertTrue(self.user.supplier_profile.tin_letter)  # sibling untouched
+        self.assertNotEqual(self.user.tradie_profile.tin_letter.name, self.user.supplier_profile.tin_letter.name)
+
+    def _base_supplier_data(self, **overrides):
+        data = {
+            'email': self.user.email, 'use_same_credentials': 'on', 'password': 'pass12345',
+            'business_name': '', 'tin': '', 'bio': '',
+            'supply_categories': ['building-materials'], 'service_towns': ['Suva'],
+        }
+        data.update(overrides)
+        return data
+
+    def test_supplier_form_happy_path_creates_profile_and_workspace(self):
+        from .forms import AddSupplierRoleForm
+        form = AddSupplierRoleForm(
+            data=self._base_supplier_data(),
+            files={'tin_letter': SimpleUploadedFile('tin.pdf', b'%PDF-1.4', content_type='application/pdf')},
+            user=self.user,
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        form.save()
+        self.assertTrue(hasattr(self.user, 'supplier_profile'))
+        self.assertIsNotNone(workspaces.get_supplier_workspace(self.user))
+
+
+@override_settings(
+    STORAGES={
+        'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
+        'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
+    }
+)
+class AddRoleViewTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email='addroleview@example.com', password='pass12345',
+            first_name='Add', last_name='RoleView', role=User.ROLE_CLIENT, town='Suva',
+        )
+        workspaces.create_client_workspace(self.user)
+
+    def test_add_role_tradie_requires_login(self):
+        response = self.client.get(reverse('add_role_tradie'), secure=True)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(reverse('login'), response.url)
+
+    def test_add_role_tradie_rejects_if_already_a_tradie(self):
+        TradieProfile.objects.create(user=self.user, trades=['cleaning'], service_towns=['Suva'])
+        self.client.login(username=self.user.email, password='pass12345')
+        response = self.client.get(reverse('add_role_tradie'), secure=True)
+        self.assertEqual(response.status_code, 403)
+
+    def test_add_role_tradie_post_creates_profile_and_switches_role(self):
+        self.client.login(username=self.user.email, password='pass12345')
+        response = self.client.post(
+            reverse('add_role_tradie'),
+            {
+                'email': self.user.email, 'use_same_credentials': 'on', 'password': 'pass12345',
+                'business_name': '', 'tin': '', 'years_experience': '1-3 years', 'bio': 'Bio',
+                'trades': ['cleaning'], 'service_towns': ['Suva'],
+                'accepted_platform_circumvention': 'on', 'accepted_invoicing_terms': 'on',
+                'tin_letter': SimpleUploadedFile('tin.pdf', b'%PDF-1.4', content_type='application/pdf'),
+            },
+            secure=True,
+        )
+        self.assertEqual(response.status_code, 302)
+        self.user.refresh_from_db()
+        self.assertTrue(hasattr(self.user, 'tradie_profile'))
+        self.assertEqual(self.user.role, User.ROLE_TRADIE)
+
+    def test_add_role_tradie_form_renders(self):
+        self.client.login(username=self.user.email, password='pass12345')
+        response = self.client.get(reverse('add_role_tradie'), secure=True)
+        self.assertEqual(response.status_code, 200)
+
+    def test_add_role_supplier_form_renders(self):
+        self.client.login(username=self.user.email, password='pass12345')
+        response = self.client.get(reverse('add_role_supplier'), secure=True)
+        self.assertEqual(response.status_code, 200)
+
+    def test_account_linking_hub_renders(self):
+        self.client.login(username=self.user.email, password='pass12345')
+        response = self.client.get(reverse('account_linking_hub'), secure=True)
+        self.assertEqual(response.status_code, 200)
+
+    def test_add_role_choose_renders(self):
+        self.client.login(username=self.user.email, password='pass12345')
+        response = self.client.get(reverse('add_role_choose'), secure=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Local Professional')
+        self.assertContains(response, 'Supplier')
+
+    def test_add_role_choose_hides_held_roles(self):
+        TradieProfile.objects.create(user=self.user, trades=['cleaning'], service_towns=['Suva'])
+        self.client.login(username=self.user.email, password='pass12345')
+        response = self.client.get(reverse('add_role_choose'), secure=True)
+        self.assertNotContains(response, 'href="{}"'.format(reverse('add_role_tradie')))
+
+    def test_manage_linked_logins_renders(self):
+        self.client.login(username=self.user.email, password='pass12345')
+        response = self.client.get(reverse('manage_linked_logins'), secure=True)
+        self.assertEqual(response.status_code, 200)
+
+    def test_merge_account_form_renders(self):
+        self.client.login(username=self.user.email, password='pass12345')
+        response = self.client.get(reverse('merge_account'), secure=True)
+        self.assertEqual(response.status_code, 200)
+
+
+@override_settings(
+    STORAGES={
+        'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
+        'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
+    }
+)
+class SupplierRegistrationWorkspaceGapFixTests(TestCase):
+    """SupplierRegistrationForm.save() previously created no capability or
+    workspace at all for a brand-new supplier -- confirms the fix."""
+
+    def test_supplier_registration_creates_client_and_supplier_workspaces(self):
+        from .forms import SupplierRegistrationForm
+        form = SupplierRegistrationForm(
+            data={
+                'first_name': 'Sup', 'last_name': 'Plier', 'email': 'supfix@example.com',
+                'mobile': '+679 000 0000', 'town': 'Suva', 'password': 'pass12345', 'password_confirm': 'pass12345',
+                'business_name': '', 'tin': '', 'bio': '',
+                'supply_categories': ['building-materials'], 'service_towns': ['Suva'],
+                'accepted_terms': 'on',
+            },
+            files={'tin_letter': SimpleUploadedFile('tin.pdf', b'%PDF-1.4', content_type='application/pdf')},
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        user = form.save()
+        self.assertIsNotNone(workspaces.get_client_workspace(user))
+        self.assertIsNotNone(workspaces.get_supplier_workspace(user))
+        self.assertTrue(UserCapability.objects.get(user=user).can_offer_services)
+
+
+class AccountMergeTests(TestCase):
+    def setUp(self):
+        self.user_a = User.objects.create_user(
+            email='merge-a@example.com', password='pass-a-12345',
+            first_name='A', last_name='User', role=User.ROLE_CLIENT, town='Suva', mobile='+679 111 1111',
+        )
+        workspaces.create_client_workspace(self.user_a)
+        self.user_b = User.objects.create_user(
+            email='merge-b@example.com', password='pass-b-12345',
+            first_name='B', last_name='User', role=User.ROLE_TRADIE, town='Nadi', mobile='+679 222 2222',
+        )
+        TradieProfile.objects.create(user=self.user_b, trades=['cleaning'], service_towns=['Nadi'])
+        workspaces.create_client_workspace(self.user_b)
+        workspaces.create_individual_provider_workspace(self.user_b)
+
+    def test_merge_form_happy_path_links_accounts(self):
+        from .forms import MergeAccountForm
+        form = MergeAccountForm(data={'email': self.user_b.email, 'password': 'pass-b-12345'}, user=self.user_a)
+        self.assertTrue(form.is_valid(), form.errors)
+        form.save()
+        linked = {u.pk for u in workspaces.get_linked_users(self.user_a)}
+        self.assertEqual(linked, {self.user_a.pk, self.user_b.pk})
+
+    def test_wrong_password_rejected(self):
+        from .forms import MergeAccountForm
+        form = MergeAccountForm(data={'email': self.user_b.email, 'password': 'wrong'}, user=self.user_a)
+        self.assertFalse(form.is_valid())
+
+    def test_self_merge_rejected(self):
+        from .forms import MergeAccountForm
+        form = MergeAccountForm(data={'email': self.user_a.email, 'password': 'pass-a-12345'}, user=self.user_a)
+        self.assertFalse(form.is_valid())
+
+    def test_soft_deleted_target_rejected(self):
+        from .forms import MergeAccountForm
+        self.user_b.account_deleted_at = django_timezone.now()
+        self.user_b.save(update_fields=['account_deleted_at'])
+        form = MergeAccountForm(data={'email': self.user_b.email, 'password': 'pass-b-12345'}, user=self.user_a)
+        self.assertFalse(form.is_valid())
+
+    def test_linked_account_transitive_closure_across_chain(self):
+        user_c = User.objects.create_user(
+            email='merge-c@example.com', password='pass-c-12345',
+            first_name='C', last_name='User', role=User.ROLE_CLIENT, town='Suva',
+        )
+        workspaces.create_client_workspace(user_c)
+        workspaces.link_accounts(self.user_a, self.user_b)
+        workspaces.link_accounts(self.user_b, user_c)
+        linked = {u.pk for u in workspaces.get_linked_users(self.user_a)}
+        self.assertEqual(linked, {self.user_a.pk, self.user_b.pk, user_c.pk})
+
+    def test_link_accounts_is_order_independent(self):
+        link1 = workspaces.link_accounts(self.user_a, self.user_b)
+        link2 = workspaces.link_accounts(self.user_b, self.user_a)
+        self.assertEqual(link1.pk, link2.pk)
+        self.assertEqual(LinkedAccount.objects.count(), 1)
+
+    def test_merge_view_requires_login(self):
+        response = self.client.get(reverse('merge_account'), secure=True)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(reverse('login'), response.url)
+
+    def test_merge_view_happy_path(self):
+        self.client.login(username=self.user_a.email, password='pass-a-12345')
+        response = self.client.post(
+            reverse('merge_account'), {'email': self.user_b.email, 'password': 'pass-b-12345'}, secure=True,
+        )
+        self.assertEqual(response.status_code, 302)
+        linked = {u.pk for u in workspaces.get_linked_users(self.user_a)}
+        self.assertEqual(linked, {self.user_a.pk, self.user_b.pk})
+
+    def test_merge_view_rate_limits_repeated_failed_attempts(self):
+        from django.core.cache import cache
+        cache.clear()
+        self.client.login(username=self.user_a.email, password='pass-a-12345')
+        for _ in range(10):
+            self.client.post(reverse('merge_account'), {'email': self.user_b.email, 'password': 'wrong'}, secure=True)
+        response = self.client.post(
+            reverse('merge_account'), {'email': self.user_b.email, 'password': 'pass-b-12345'}, secure=True,
+        )
+        # Blocked by the rate limit even though this attempt's credentials are correct.
+        linked = {u.pk for u in workspaces.get_linked_users(self.user_a)}
+        self.assertEqual(linked, {self.user_a.pk})
+
+
+class SwitchTabTests(TestCase):
+    def setUp(self):
+        self.user_a = User.objects.create_user(
+            email='switch-a@example.com', password='pass-a-12345',
+            first_name='A', last_name='User', role=User.ROLE_CLIENT, town='Suva',
+        )
+        workspaces.create_client_workspace(self.user_a)
+        self.user_b = User.objects.create_user(
+            email='switch-b@example.com', password='pass-b-12345',
+            first_name='B', last_name='User', role=User.ROLE_TRADIE, town='Nadi',
+        )
+        TradieProfile.objects.create(user=self.user_b, trades=['cleaning'], service_towns=['Nadi'])
+        workspaces.create_client_workspace(self.user_b)
+        workspaces.create_individual_provider_workspace(self.user_b)
+        workspaces.link_accounts(self.user_a, self.user_b)
+
+    def test_switch_tab_requires_login(self):
+        response = self.client.post(
+            reverse('switch_tab'), {'target_user_id': self.user_b.pk, 'target_role': 'tradie'}, secure=True,
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(reverse('login'), response.url)
+
+    def test_switch_tab_to_linked_account_logs_in_as_target(self):
+        self.client.login(username=self.user_a.email, password='pass-a-12345')
+        response = self.client.post(
+            reverse('switch_tab'), {'target_user_id': self.user_b.pk, 'target_role': User.ROLE_TRADIE}, secure=True,
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(self.client.session['_auth_user_id'], str(self.user_b.pk))
+        self.user_b.refresh_from_db()
+        self.assertEqual(self.user_b.role, User.ROLE_TRADIE)
+
+    def test_switch_tab_rejects_a_user_not_in_the_linked_set(self):
+        stranger = User.objects.create_user(
+            email='switch-stranger@example.com', password='pass-c-12345',
+            first_name='C', last_name='User', role=User.ROLE_CLIENT, town='Suva',
+        )
+        workspaces.create_client_workspace(stranger)
+        self.client.login(username=self.user_a.email, password='pass-a-12345')
+        response = self.client.post(
+            reverse('switch_tab'), {'target_user_id': stranger.pk, 'target_role': User.ROLE_CLIENT}, secure=True,
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_switch_tab_rejects_get(self):
+        self.client.login(username=self.user_a.email, password='pass-a-12345')
+        response = self.client.get(reverse('switch_tab'), secure=True)
+        self.assertEqual(response.status_code, 405)
+
+
+class ClearLinkedLoginTests(TestCase):
+    def setUp(self):
+        self.user_a = User.objects.create_user(
+            email='clear-a@example.com', password='pass-a-12345',
+            first_name='A', last_name='User', role=User.ROLE_CLIENT, town='Suva',
+        )
+        workspaces.create_client_workspace(self.user_a)
+        self.user_b = User.objects.create_user(
+            email='clear-b@example.com', password='pass-b-12345',
+            first_name='B', last_name='User', role=User.ROLE_TRADIE, town='Nadi',
+        )
+        TradieProfile.objects.create(user=self.user_b, trades=['cleaning'], service_towns=['Nadi'])
+        workspaces.create_individual_provider_workspace(self.user_b)
+        workspaces.link_accounts(self.user_a, self.user_b)
+
+    def test_manage_linked_logins_renders_with_a_clearable_login(self):
+        self.client.login(username=self.user_a.email, password='pass-a-12345')
+        response = self.client.get(reverse('manage_linked_logins'), secure=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, self.user_a.email)
+        self.assertContains(response, self.user_b.email)
+        self.assertContains(response, 'Clear this login')
+
+    def test_clear_login_disables_target_password(self):
+        self.client.login(username=self.user_a.email, password='pass-a-12345')
+        response = self.client.post(
+            reverse('clear_linked_login', args=[self.user_b.pk]), {'password': 'pass-a-12345'}, secure=True,
+        )
+        self.assertEqual(response.status_code, 302)
+        self.user_b.refresh_from_db()
+        self.assertFalse(self.user_b.has_usable_password())
+
+    def test_clear_login_requires_requesting_users_own_password(self):
+        self.client.login(username=self.user_a.email, password='pass-a-12345')
+        self.client.post(
+            reverse('clear_linked_login', args=[self.user_b.pk]), {'password': 'wrong'}, secure=True,
+        )
+        self.user_b.refresh_from_db()
+        self.assertTrue(self.user_b.has_usable_password())
+
+    def test_clear_login_blocks_removing_the_last_usable_login(self):
+        self.user_b.set_unusable_password()
+        self.user_b.save(update_fields=['password'])
+        self.client.login(username=self.user_a.email, password='pass-a-12345')
+        response = self.client.post(
+            reverse('clear_linked_login', args=[self.user_a.pk]), {'password': 'pass-a-12345'}, secure=True,
+        )
+        self.assertEqual(response.status_code, 302)
+        self.user_a.refresh_from_db()
+        self.assertTrue(self.user_a.has_usable_password())
+
+    def test_clear_login_rejects_a_user_not_in_the_linked_set(self):
+        stranger = User.objects.create_user(
+            email='clear-stranger@example.com', password='pass-c-12345',
+            first_name='C', last_name='User', role=User.ROLE_CLIENT, town='Suva',
+        )
+        self.client.login(username=self.user_a.email, password='pass-a-12345')
+        response = self.client.post(
+            reverse('clear_linked_login', args=[stranger.pk]), {'password': 'pass-a-12345'}, secure=True,
+        )
+        self.assertEqual(response.status_code, 403)

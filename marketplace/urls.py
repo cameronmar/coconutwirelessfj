@@ -17,6 +17,15 @@ urlpatterns = [
     path('password-reset/<str:uidb64>/<str:token>/', views.password_reset_confirm, name='password_reset_confirm'),
     path('account/change-password/', views.change_password, name='change_password'),
     path('account/delete/',        views.delete_account, name='delete_account'),
+    # Multi-role accounts & account linking
+    path('account/link/',                            views.account_linking_hub,   name='account_linking_hub'),
+    path('account/link/add-role/',                    views.add_role_choose,       name='add_role_choose'),
+    path('account/link/add-role/tradie/',             views.add_role_tradie,       name='add_role_tradie'),
+    path('account/link/add-role/supplier/',           views.add_role_supplier,     name='add_role_supplier'),
+    path('account/link/merge/',                       views.merge_account,         name='merge_account'),
+    path('account/link/logins/',                      views.manage_linked_logins,  name='manage_linked_logins'),
+    path('account/link/logins/<int:user_id>/clear/',  views.clear_linked_login,    name='clear_linked_login'),
+    path('account/switch-tab/',                       views.switch_tab,            name='switch_tab'),
     # Trust & safety
     path('report/',                          views.report_content, name='report_content'),
     path('users/<int:pk>/block/',            views.block_user,     name='block_user'),
