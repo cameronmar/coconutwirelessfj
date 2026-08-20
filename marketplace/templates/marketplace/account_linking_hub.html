@@ -1,0 +1,36 @@
+{% extends "marketplace/base.html" %}
+{% block title %}Add or Merge Another Account – The Coconut Wireless Network{% endblock %}
+
+{% block extra_css %}
+<style>
+.settings-page{max-width:600px;margin:0 auto;padding:28px 20px 50px;}
+.page-title{font-size:1.4rem;font-weight:700;margin:0 0 4px;}
+.page-sub{color:var(--muted);font-size:.9rem;margin:0 0 22px;}
+.choice-card{display:block;background:var(--white);border:1.5px solid #e0edf2;border-radius:14px;padding:18px 20px;margin-bottom:14px;text-decoration:none;color:inherit;transition:border-color .15s;}
+.choice-card:hover{border-color:var(--blue);}
+.choice-card h2{font-size:1.05rem;color:var(--blue);margin:0 0 6px;}
+.choice-card p{margin:0;font-size:.87rem;color:var(--muted);line-height:1.5;}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="settings-page">
+  <div class="page-title">Add or merge another account</div>
+  <p class="page-sub">Pick up another role on this account, or link in an account you already created separately.</p>
+
+  <a href="{% url 'add_role_choose' %}" class="choice-card">
+    <h2>Add a role to this account</h2>
+    <p>Become a local pro or a supplier without leaving your current account — we'll reuse your name, mobile, town, and any documents already on file.</p>
+  </a>
+
+  <a href="{% url 'merge_account' %}" class="choice-card">
+    <h2>Merge an existing account</h2>
+    <p>Already signed up separately with a different email? Link that account in — afterwards either login reaches everything, and each keeps its own contact details.</p>
+  </a>
+
+  <a href="{% url 'manage_linked_logins' %}" class="choice-card">
+    <h2>Manage linked logins</h2>
+    <p>See which accounts are linked, and disable a login you no longer want to use.</p>
+  </a>
+</div>
+{% endblock %}

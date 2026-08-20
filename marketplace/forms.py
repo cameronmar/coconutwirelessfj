@@ -5,10 +5,12 @@ from decimal import Decimal
 from django import forms
 from django.conf import settings
 from django.core.exceptions import ValidationError
+from django.core.files.base import ContentFile
 from django.db import transaction
 
 from .constants import TOWN_CHOICES, EXPERIENCE_CHOICES, FOUNDING_MEMBER_SLOTS, FOUNDING_MEMBER_CREDIT
 from .models import User, TradieProfile, Task, Quote, Message, TradeCategory, TaskPhoto, MarketListing, MarketOrder, PlatformSettings, SupplyCategory, SupplierProfile, ContentReport
+from . import workspaces
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -92,15 +94,19 @@ class ClientRegistrationForm(forms.Form):
 
     def save(self):
         cd = self.cleaned_data
-        return User.objects.create_user(
-            email=cd['email'],
-            password=cd['password'],
-            first_name=cd['first_name'],
-            last_name=cd['last_name'],
-            mobile=cd['mobile'],
-            town=cd['town'],
-            role=User.ROLE_CLIENT,
-        )
+        with transaction.atomic():
+            user = User.objects.create_user(
+                email=cd['email'],
+                password=cd['password'],
+                first_name=cd['first_name'],
+                last_name=cd['last_name'],
+                mobile=cd['mobile'],
+                town=cd['town'],
+                role=User.ROLE_CLIENT,
+            )
+            workspaces.ensure_user_capability(user)
+            workspaces.create_client_workspace(user)
+        return user
 
 
 class TradieRegistrationForm(forms.Form):
@@ -206,6 +212,9 @@ class TradieRegistrationForm(forms.Form):
                 if cd.get(field):
                     setattr(profile, field, cd[field])
             profile.save()
+            workspaces.ensure_user_capability(user, can_offer_services=True)
+            workspaces.create_client_workspace(user)
+            workspaces.create_individual_provider_workspace(user)
         return user
 
 
@@ -896,6 +905,9 @@ class SupplierRegistrationForm(forms.Form):
                 if cd.get(field):
                     setattr(profile, field, cd[field])
             profile.save()
+            workspaces.ensure_user_capability(user, can_offer_services=True)
+            workspaces.create_supplier_workspace(user)
+            workspaces.create_client_workspace(user)
         return user
 
 
@@ -937,6 +949,283 @@ class DeleteAccountForm(forms.Form):
         required=True,
         label='I understand this will permanently deactivate my account',
         error_messages={'required': 'Please confirm you understand this action.'},
+    )
+
+    def __init__(self, *args, user=None, **kwargs):
+        self.user = user
+        super().__init__(*args, **kwargs)
+
+    def clean_password(self):
+        password = self.cleaned_data['password']
+        if not self.user or not self.user.check_password(password):
+            raise ValidationError('Incorrect password.')
+        return password
+
+
+# ── Multi-role accounts & account linking ───────────────────────────────────
+
+class AddTradieRoleForm(forms.Form):
+    """Adds a TradieProfile (and the individual-provider workspace) to a
+    user who already has an account under some other role — never creates a
+    separate account. Field set is TradieRegistrationForm's role-specific
+    subset only: first_name/last_name/mobile/town/password_confirm/
+    accepted_terms are all already on `user` and dropped. email/password
+    are kept but repurposed as a lightweight re-authentication step (see
+    clean_email/clean_password), per an explicit request that this form
+    still look like the familiar sign-up page."""
+    email    = forms.EmailField(widget=_input('you@example.fj', type_='email'))
+    use_same_credentials = forms.BooleanField(
+        required=False, initial=True, label="Use my current account's email",
+    )
+    password = forms.CharField(
+        label='Re-enter your password to confirm',
+        widget=forms.PasswordInput(attrs={'class': 'form-input', 'placeholder': 'Your current password'}),
+    )
+    business_name    = forms.CharField(max_length=100, required=False, label='Company / Business Name', widget=_input('e.g. Tora Plumbing Suva (leave blank if you work as an individual contractor)'))
+    tin              = forms.CharField(max_length=50, required=False, label='TIN Number (optional)', widget=_input('e.g. P033-12345'))
+    years_experience = forms.ChoiceField(choices=[('', 'Select…')] + list(EXPERIENCE_CHOICES), widget=_select())
+    bio              = forms.CharField(widget=forms.Textarea(attrs={'class': 'form-input', 'rows': 4, 'placeholder': 'Tell clients about your experience, specialties and work area…'}))
+    trades           = forms.MultipleChoiceField(choices=[], widget=forms.CheckboxSelectMultiple)
+    service_towns    = forms.MultipleChoiceField(choices=TOWN_CHOICES, widget=forms.CheckboxSelectMultiple)
+    tin_letter                     = forms.FileField(label='TIN Letter', required=False, help_text='Upload your FRCA TIN letter (PDF, JPG, or PNG, up to 10MB).')
+    business_licence               = forms.FileField(label='Business Licence', required=False, help_text='Optional.')
+    public_liability_insurance     = forms.FileField(label='Public Liability Insurance', required=False, help_text='Optional.')
+    electrical_contractors_licence = forms.FileField(label='Electrical Contractors Licence', required=False, help_text="Electrical work is safety-critical — upload this now if you have it. If not, you can still register, but your account won't be able to bid on jobs until our team has reviewed it.")
+    plumber_licence                = forms.FileField(label='Plumber Licence', required=False, help_text="Plumbing work is safety-critical — upload this now if you have it. If not, you can still register, but your account won't be able to bid on jobs until our team has reviewed it.")
+    accepted_platform_circumvention = forms.BooleanField(
+        required=True,
+        error_messages={'required': 'You must acknowledge the Platform Circumvention Fee policy.'}
+    )
+    accepted_invoicing_terms = forms.BooleanField(
+        required=True,
+        error_messages={'required': 'You must acknowledge the invoicing and payment obligations.'}
+    )
+
+    def __init__(self, *args, user=None, **kwargs):
+        self.user = user
+        super().__init__(*args, **kwargs)
+        self.fields['trades'].choices = TradeCategory.get_choices()
+        if user:
+            self.fields['email'].initial = user.email
+            self.reused_tin_letter = bool(hasattr(user, 'supplier_profile') and user.supplier_profile.tin_letter)
+            if hasattr(user, 'supplier_profile'):
+                sp = user.supplier_profile
+                self.fields['business_name'].initial = sp.business_name
+                self.fields['tin'].initial = sp.tin
+                self.fields['service_towns'].initial = sp.service_towns
+        else:
+            self.reused_tin_letter = False
+        if self.reused_tin_letter:
+            self.fields['tin_letter'].help_text = "We'll reuse the TIN letter already on file for your supplier account, or upload a new one."
+
+    def clean_email(self):
+        email = self.cleaned_data['email'].lower()
+        if not self.user or email != self.user.email.lower():
+            raise ValidationError("This must match your current account's email — adding a role only ever applies to your own account.")
+        return email
+
+    def clean_password(self):
+        password = self.cleaned_data['password']
+        if not self.user or not self.user.check_password(password):
+            raise ValidationError('Incorrect password.')
+        return password
+
+    def clean_tin_letter(self):
+        return _clean_verification_document(self.cleaned_data.get('tin_letter'))
+
+    def clean_business_licence(self):
+        return _clean_verification_document(self.cleaned_data.get('business_licence'))
+
+    def clean_public_liability_insurance(self):
+        return _clean_verification_document(self.cleaned_data.get('public_liability_insurance'))
+
+    def clean_electrical_contractors_licence(self):
+        return _clean_verification_document(self.cleaned_data.get('electrical_contractors_licence'))
+
+    def clean_plumber_licence(self):
+        return _clean_verification_document(self.cleaned_data.get('plumber_licence'))
+
+    def clean(self):
+        cd = super().clean()
+        if not cd.get('tin_letter') and not self.reused_tin_letter:
+            self.add_error('tin_letter', 'Upload your TIN letter, or add a supplier account first so we can reuse it.')
+        return cd
+
+    def save(self):
+        cd = self.cleaned_data
+        user = self.user
+        with transaction.atomic():
+            # Same founding-member mutex as TradieRegistrationForm.save() —
+            # someone adding this role later should still be eligible while
+            # slots remain.
+            PlatformSettings.objects.select_for_update().filter(pk=PlatformSettings.get_active().pk).exists()
+            is_founder = TradieProfile.objects.count() < FOUNDING_MEMBER_SLOTS
+            profile = TradieProfile(
+                user=user,
+                business_name=cd.get('business_name', ''),
+                tin=cd.get('tin', ''),
+                years_experience=cd.get('years_experience', ''),
+                bio=cd.get('bio', ''),
+                trades=list(cd.get('trades', [])),
+                service_towns=list(cd.get('service_towns', [])),
+                is_founding_member=is_founder,
+                founding_member_credit_balance=Decimal(FOUNDING_MEMBER_CREDIT) if is_founder else Decimal('0.00'),
+            )
+            for field in ('business_licence', 'public_liability_insurance',
+                          'electrical_contractors_licence', 'plumber_licence'):
+                if cd.get(field):
+                    setattr(profile, field, cd[field])
+            if cd.get('tin_letter'):
+                profile.tin_letter = cd['tin_letter']
+            elif self.reused_tin_letter:
+                src = user.supplier_profile.tin_letter
+                profile.tin_letter.save(src.name, ContentFile(src.read()), save=False)
+            profile.save()
+            workspaces.ensure_user_capability(user, can_offer_services=True)
+            workspaces.create_client_workspace(user)
+            workspaces.create_individual_provider_workspace(user)
+        return user
+
+
+class AddSupplierRoleForm(forms.Form):
+    """Mirrors AddTradieRoleForm — see its docstring. Adds a SupplierProfile
+    (and the supplier workspace) to a user who already has an account under
+    some other role."""
+    email    = forms.EmailField(widget=_input('you@example.fj', type_='email'))
+    use_same_credentials = forms.BooleanField(
+        required=False, initial=True, label="Use my current account's email",
+    )
+    password = forms.CharField(
+        label='Re-enter your password to confirm',
+        widget=forms.PasswordInput(attrs={'class': 'form-input', 'placeholder': 'Your current password'}),
+    )
+    business_name     = forms.CharField(max_length=100, required=False, label='Business Name (optional)', widget=_input('e.g. Pacific Supplies Ltd'))
+    tin               = forms.CharField(max_length=50, required=False, label='TIN Number (optional)', widget=_input('e.g. P033-12345'))
+    bio               = forms.CharField(required=False, widget=forms.Textarea(attrs={'class': 'form-input', 'rows': 4, 'placeholder': 'Describe your business, the products you supply, and your service area…'}))
+    supply_categories = forms.MultipleChoiceField(choices=[], widget=forms.CheckboxSelectMultiple)
+    service_towns     = forms.MultipleChoiceField(choices=TOWN_CHOICES, widget=forms.CheckboxSelectMultiple)
+    tin_letter                = forms.FileField(label='TIN Letter', required=False, help_text='Upload your FRCA TIN letter (PDF, JPG, or PNG, up to 10MB).')
+    business_registration     = forms.FileField(label='Business Registration', required=False, help_text='Optional.')
+    import_export_licence     = forms.FileField(label='Import/Export Licence', required=False, help_text='Optional.')
+
+    def __init__(self, *args, user=None, **kwargs):
+        self.user = user
+        super().__init__(*args, **kwargs)
+        self.fields['supply_categories'].choices = SupplyCategory.get_choices()
+        if user:
+            self.fields['email'].initial = user.email
+            self.reused_tin_letter = bool(hasattr(user, 'tradie_profile') and user.tradie_profile.tin_letter)
+            if hasattr(user, 'tradie_profile'):
+                tp = user.tradie_profile
+                self.fields['business_name'].initial = tp.business_name
+                self.fields['tin'].initial = tp.tin
+                self.fields['service_towns'].initial = tp.service_towns
+        else:
+            self.reused_tin_letter = False
+        if self.reused_tin_letter:
+            self.fields['tin_letter'].help_text = "We'll reuse the TIN letter already on file for your local pro account, or upload a new one."
+
+    def clean_email(self):
+        email = self.cleaned_data['email'].lower()
+        if not self.user or email != self.user.email.lower():
+            raise ValidationError("This must match your current account's email — adding a role only ever applies to your own account.")
+        return email
+
+    def clean_password(self):
+        password = self.cleaned_data['password']
+        if not self.user or not self.user.check_password(password):
+            raise ValidationError('Incorrect password.')
+        return password
+
+    def clean_tin_letter(self):
+        return _clean_verification_document(self.cleaned_data.get('tin_letter'))
+
+    def clean_business_registration(self):
+        return _clean_verification_document(self.cleaned_data.get('business_registration'))
+
+    def clean_import_export_licence(self):
+        return _clean_verification_document(self.cleaned_data.get('import_export_licence'))
+
+    def clean(self):
+        cd = super().clean()
+        if not cd.get('supply_categories'):
+            raise ValidationError('Please select at least one supply category.')
+        if not cd.get('service_towns'):
+            raise ValidationError('Please select at least one service town.')
+        if not cd.get('tin_letter') and not self.reused_tin_letter:
+            self.add_error('tin_letter', 'Upload your TIN letter, or add a local pro account first so we can reuse it.')
+        return cd
+
+    def save(self):
+        cd = self.cleaned_data
+        user = self.user
+        with transaction.atomic():
+            profile = SupplierProfile(
+                user=user,
+                business_name=cd.get('business_name', ''),
+                tin=cd.get('tin', ''),
+                bio=cd.get('bio', ''),
+                supply_categories=list(cd.get('supply_categories', [])),
+                service_towns=list(cd.get('service_towns', [])),
+            )
+            for field in ('business_registration', 'import_export_licence'):
+                if cd.get(field):
+                    setattr(profile, field, cd[field])
+            if cd.get('tin_letter'):
+                profile.tin_letter = cd['tin_letter']
+            elif self.reused_tin_letter:
+                src = user.tradie_profile.tin_letter
+                profile.tin_letter.save(src.name, ContentFile(src.read()), save=False)
+            profile.save()
+            workspaces.ensure_user_capability(user, can_offer_services=True)
+            workspaces.create_client_workspace(user)
+            workspaces.create_supplier_workspace(user)
+        return user
+
+
+class MergeAccountForm(forms.Form):
+    """Links a second, already-existing account to the requesting user's
+    own — see workspaces.link_accounts()/get_linked_users(). Verifies the
+    target account's password directly via check_password(), not
+    authenticate() — this never logs the requester in as the target account,
+    that only ever happens later, on-demand, via views.switch_tab, once the
+    two are already linked."""
+    email    = forms.EmailField(label="The other account's email", widget=_input('you@example.fj', type_='email'))
+    password = forms.CharField(label="That account's password", widget=forms.PasswordInput(attrs={'class': 'form-input', 'placeholder': 'Password'}))
+
+    def __init__(self, *args, user=None, **kwargs):
+        self.user = user
+        super().__init__(*args, **kwargs)
+
+    def clean(self):
+        cd = super().clean()
+        email, password = cd.get('email'), cd.get('password')
+        if not email or not password:
+            return cd
+        target = User.objects.filter(email__iexact=email).first()
+        # Same message either way — no enumeration of which of email/
+        # password was wrong, or whether the account even exists.
+        if not target or not target.is_active or not target.check_password(password):
+            raise ValidationError('Incorrect email or password.')
+        if target.pk == self.user.pk:
+            raise ValidationError("That's your current account.")
+        if target.account_deleted_at:
+            raise ValidationError('That account is no longer active.')
+        self.target_user = target
+        return cd
+
+    def save(self):
+        return workspaces.link_accounts(self.user, self.target_user)
+
+
+class ClearLinkedLoginForm(forms.Form):
+    """Re-checks the REQUESTING user's own current password before
+    disabling any login in their linked group — see views.clear_linked_login.
+    Deliberately not the target's password: control of the group was
+    already proven once, at merge time."""
+    password = forms.CharField(
+        label='Your current password',
+        widget=forms.PasswordInput(attrs={'class': 'form-input', 'placeholder': 'Your current password'}),
     )
 
     def __init__(self, *args, user=None, **kwargs):

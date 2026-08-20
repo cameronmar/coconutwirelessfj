@@ -31,12 +31,16 @@ from .constants import (
     TOWN_CHOICES,
 )
 from .forms import (
+    AddSupplierRoleForm,
+    AddTradieRoleForm,
     ChangePasswordForm,
+    ClearLinkedLoginForm,
     ClientRegistrationForm,
     ContactSupportForm,
     ContentReportForm,
     DeleteAccountForm,
     LoginForm,
+    MergeAccountForm,
     MarketListingForm,
     MarketOrderForm,
     MessageForm,
@@ -58,6 +62,7 @@ from .forms import (
 from .models import (
     ContentReport,
     Invoice,
+    LinkedAccount,
     MarketListing,
     MarketOrder,
     Message,
@@ -81,6 +86,7 @@ from .models import (
     TradieProfile,
     User,
 )
+from . import workspaces
 from .utils import (
     calculate_market_price_per_unit,
     calculate_market_take_home,
@@ -548,6 +554,7 @@ def client_dashboard(request):
         ).count(),
         'appointments':    QuotingAppointment.objects.filter(client=request.user).select_related('task', 'provider').prefetch_related('slots').order_by('-created_at'),
         'sponsors':        Sponsor.get_active_for_placement('client_dashboard'),
+        'role_tabs':       workspaces.get_role_tabs(request.user),
     }
     return render(request, 'marketplace/client_dashboard.html', ctx)
 
@@ -607,6 +614,7 @@ def tradie_dashboard(request):
         'appointments':    provider_appointments,
         'sponsors':        Sponsor.get_active_for_placement('tradie_dashboard'),
         'tradie_can_quote': tradie_can_quote,
+        'role_tabs':       workspaces.get_role_tabs(request.user),
     }
     return render(request, 'marketplace/tradie_dashboard.html', ctx)
 
@@ -760,6 +768,7 @@ def post_task(request):
     if request.method == 'POST' and form.is_valid():
         task = form.save(commit=False)
         task.client = request.user
+        task.client_workspace = workspaces.resolve_client_workspace_for_write(request.user, 'post_task')
         task.save()
         form.save_m2m()
         notify_matching_tradies_new_job(task)
@@ -926,6 +935,7 @@ def submit_quote(request, pk):
         q = form.save(commit=False)
         q.task   = task
         q.tradie = request.user
+        q.provider_workspace = workspaces.resolve_individual_provider_workspace_for_write(request.user, 'submit_quote')
         q.customer_facing_quote = q.price
         q.client_quote_total = q.price
         q.minimum_take_home_amount = form.cleaned_data.get('minimum_take_home_amount')
@@ -1186,6 +1196,7 @@ def accept_quote(request, pk, qpk):
     quote.save()
     task.status          = Task.STATUS_ASSIGNED
     task.assigned_tradie = quote.tradie
+    task.assigned_provider_workspace = quote.provider_workspace
     task.save()
     flash.success(request, f'Quote accepted! {quote.tradie.first_name} is assigned.')
     return redirect('task_detail', pk=pk)
@@ -1228,6 +1239,8 @@ def rate_tradie(request, pk):
             task=task,
             rater=request.user,
             ratee=task.assigned_tradie,
+            reviewer_workspace=workspaces.resolve_client_workspace_for_write(request.user, 'rate_tradie:reviewer'),
+            reviewed_workspace=workspaces.resolve_individual_provider_workspace_for_write(task.assigned_tradie, 'rate_tradie:reviewed'),
             reliability_punctuality   = int(cd['reliability_punctuality']),
             quote_price_accuracy      = int(cd['quote_price_accuracy']),
             value_for_money           = int(cd['value_for_money']),
@@ -1264,6 +1277,8 @@ def rate_client(request, pk):
             task=task,
             rater=request.user,
             ratee=task.client,
+            reviewer_workspace=workspaces.resolve_individual_provider_workspace_for_write(request.user, 'rate_client:reviewer'),
+            reviewed_workspace=workspaces.resolve_client_workspace_for_write(task.client, 'rate_client:reviewed'),
             access_readiness = int(cd['access_readiness']),
             scope_clarity    = int(cd['scope_clarity']),
             communication    = int(cd['communication']),
@@ -1422,10 +1437,173 @@ def delete_account(request):
             user.is_active  = False
             user.account_deleted_at = timezone.now()
             user.save()
+            # Deletion must actually be meaningful — a linked partner's tab-
+            # switcher must never remain a side channel into this account
+            # afterward. get_linked_users() also filters account_deleted_at
+            # as a backstop, but removing the rows outright keeps the
+            # LinkedAccount table itself free of stale references.
+            LinkedAccount.objects.filter(Q(user_a=user) | Q(user_b=user)).delete()
         logout(request)
         flash.success(request, 'Your account has been deleted.')
         return redirect('home')
     return render(request, 'marketplace/delete_account.html', {'form': form})
+
+
+# ── Multi-role accounts & account linking ────────────────────────────────────
+# "Add a role" lets an existing user pick up a second profile (client/tradie/
+# supplier) on the SAME User row — see workspaces.get_own_available_roles/
+# switch_own_role. "Merge" links a second, already-existing User row via
+# LinkedAccount — see workspaces.link_accounts/get_linked_users — after which
+# switch_tab can swap the session's identity between them.
+
+@login_required
+def account_linking_hub(request):
+    return render(request, 'marketplace/account_linking_hub.html', {
+        'held_roles': workspaces.get_own_available_roles(request.user),
+    })
+
+
+@login_required
+def add_role_choose(request):
+    held = set(workspaces.get_own_available_roles(request.user))
+    can_add_tradie = User.ROLE_TRADIE not in held
+    can_add_supplier = User.ROLE_SUPPLIER not in held and (
+        settings.SUPPLIERS_ENABLED or request.user.can_preview_unlaunched_features()
+    )
+    return render(request, 'marketplace/add_role_choose.html', {
+        'can_add_tradie': can_add_tradie,
+        'can_add_supplier': can_add_supplier,
+        'nothing_to_add': not can_add_tradie and not can_add_supplier,
+    })
+
+
+@login_required
+def add_role_tradie(request):
+    if hasattr(request.user, 'tradie_profile'):
+        raise PermissionDenied
+    form = AddTradieRoleForm(request.POST or None, request.FILES or None, user=request.user)
+    if request.method == 'POST' and form.is_valid():
+        user = form.save()
+        settings_obj = PlatformSettings.get_active()
+        TermsAcceptance.objects.create(
+            user=user,
+            terms_version=settings_obj.terms_version if settings_obj else '1.0',
+            ip_address=request.META.get('REMOTE_ADDR'),
+            user_agent=request.META.get('HTTP_USER_AGENT', ''),
+            accepted_platform_circumvention=form.cleaned_data.get('accepted_platform_circumvention', False),
+            accepted_invoicing_terms=form.cleaned_data.get('accepted_invoicing_terms', False),
+        )
+        workspaces.switch_own_role(request, User.ROLE_TRADIE)
+        flash.success(request, 'Your local professional account is set up and pending document verification.')
+        return redirect('tradie_dashboard')
+    return render(request, 'marketplace/add_role_tradie.html', {
+        'form': form,
+        'trade_choices': TradeCategory.get_choices(),
+        'town_choices': TOWN_CHOICES,
+    })
+
+
+@beta_feature('SUPPLIERS_ENABLED')
+@login_required
+def add_role_supplier(request):
+    if hasattr(request.user, 'supplier_profile'):
+        raise PermissionDenied
+    form = AddSupplierRoleForm(request.POST or None, request.FILES or None, user=request.user)
+    if request.method == 'POST' and form.is_valid():
+        user = form.save()
+        TermsAcceptance.objects.create(
+            user=user,
+            terms_version='1.0',
+            ip_address=request.META.get('REMOTE_ADDR'),
+            user_agent=request.META.get('HTTP_USER_AGENT', ''),
+            accepted_platform_circumvention=False,
+            accepted_invoicing_terms=False,
+        )
+        workspaces.switch_own_role(request, User.ROLE_SUPPLIER)
+        flash.success(request, 'Your supplier account is set up and pending document verification.')
+        return redirect('supplier_dashboard')
+    return render(request, 'marketplace/add_role_supplier.html', {
+        'form': form,
+        'supply_choices': SupplyCategory.get_choices(),
+        'town_choices': TOWN_CHOICES,
+    })
+
+
+@login_required
+def merge_account(request):
+    form = MergeAccountForm(request.POST or None, user=request.user)
+    if request.method == 'POST':
+        # Dual rate limiting: this endpoint is effectively a second login
+        # form (it looks up an arbitrary email and checks a password), so a
+        # logged-in attacker could otherwise use it as a password-guessing
+        # oracle against target accounts they don't own. Both IP and the
+        # requesting user's own id are limited.
+        if _rate_limited(request, 'merge_account_ip', max_attempts=10, window_seconds=900) or \
+           _rate_limited(request, f'merge_account_user:{request.user.pk}', max_attempts=10, window_seconds=900):
+            flash.error(request, 'Too many attempts. Please wait a few minutes and try again.')
+            return render(request, 'marketplace/merge_account.html', {'form': form})
+        if form.is_valid():
+            form.save()
+            flash.success(request, 'Accounts linked — either login now reaches both.')
+            return redirect('dashboard')
+    return render(request, 'marketplace/merge_account.html', {'form': form})
+
+
+@login_required
+@require_POST
+def switch_tab(request):
+    """State-changing session-identity operation — POST only, never a GET
+    link. The only input is target_user_id/target_role, both checked
+    against a server-derived set (get_linked_users/get_own_available_roles)
+    before anything happens — ownership of the target account was already
+    proven once, at merge time, not re-checked here."""
+    target_user_id = request.POST.get('target_user_id', '')
+    target_role = request.POST.get('target_role', '')
+    linked = {u.pk: u for u in workspaces.get_linked_users(request.user)}
+    target_user = linked.get(int(target_user_id)) if target_user_id.isdigit() else None
+    if not target_user or target_role not in workspaces.get_own_available_roles(target_user):
+        raise PermissionDenied
+    if target_user.pk != request.user.pk:
+        login(request, target_user, backend='django.contrib.auth.backends.ModelBackend')
+    workspaces.switch_own_role(request, target_role)
+    return redirect('dashboard')
+
+
+@login_required
+def manage_linked_logins(request):
+    linked = workspaces.get_linked_users(request.user)
+    usable_count = sum(1 for u in linked if u.has_usable_password())
+    rows = [{
+        'user': u,
+        'is_self': u.pk == request.user.pk,
+        'usable': u.has_usable_password(),
+        'can_clear': u.has_usable_password() and usable_count > 1,
+        'form': ClearLinkedLoginForm(user=request.user),
+    } for u in linked]
+    return render(request, 'marketplace/manage_linked_logins.html', {'rows': rows})
+
+
+@login_required
+@require_POST
+def clear_linked_login(request, user_id):
+    linked = {u.pk: u for u in workspaces.get_linked_users(request.user)}
+    target = linked.get(user_id)
+    if not target:
+        raise PermissionDenied
+    # Recomputed fresh on every request — never trust a cached/stale count
+    # for a decision this consequential (locking the account owner out).
+    usable_count = sum(1 for u in linked.values() if u.has_usable_password())
+    if target.has_usable_password() and usable_count <= 1:
+        flash.error(request, 'At least one login must remain active.')
+        return redirect('manage_linked_logins')
+    form = ClearLinkedLoginForm(request.POST, user=request.user)
+    if form.is_valid():
+        target.set_unusable_password()
+        target.save(update_fields=['password'])
+        flash.success(request, f'{target.email} can no longer be used to log in directly.')
+    else:
+        flash.error(request, 'Incorrect password.')
+    return redirect('manage_linked_logins')
 
 
 # ── Content reporting & blocking ─────────────────────────────────────────────
@@ -1975,6 +2153,7 @@ def supplier_dashboard(request):
         'accepted_enquiries': accepted,
         'closed_enquiries': closed,
         'total_enquiries': enquiries.count(),
+        'role_tabs': workspaces.get_role_tabs(request.user),
     })
 
 

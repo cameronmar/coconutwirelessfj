@@ -1,0 +1,19 @@
+{% if role_tabs|length > 1 %}
+<style>
+.role-tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px;}
+.role-tab-form{display:contents;}
+.role-tab{border:1.5px solid #cce4ef;background:var(--white);color:var(--text);border-radius:20px;padding:7px 16px;font-size:.85rem;font-weight:600;cursor:pointer;font-family:inherit;}
+.role-tab:hover:not(:disabled){border-color:var(--blue);}
+.role-tab.active{background:var(--blue);border-color:var(--blue);color:var(--white);cursor:default;}
+</style>
+<div class="role-tabs">
+  {% for tab in role_tabs %}
+  <form method="post" action="{% url 'switch_tab' %}" class="role-tab-form">
+    {% csrf_token %}
+    <input type="hidden" name="target_user_id" value="{{ tab.user_id }}">
+    <input type="hidden" name="target_role" value="{{ tab.role }}">
+    <button type="submit" class="role-tab{% if tab.is_current %} active{% endif %}"{% if tab.is_current %} disabled{% endif %}>{{ tab.label }}</button>
+  </form>
+  {% endfor %}
+</div>
+{% endif %}

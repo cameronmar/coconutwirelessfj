@@ -1,0 +1,40 @@
+{% extends "marketplace/base.html" %}
+{% block title %}Add a Role – The Coconut Wireless Network{% endblock %}
+
+{% block extra_css %}
+<style>
+.settings-page{max-width:600px;margin:0 auto;padding:28px 20px 50px;}
+.page-title{font-size:1.4rem;font-weight:700;margin:0 0 4px;}
+.page-sub{color:var(--muted);font-size:.9rem;margin:0 0 22px;}
+.choice-card{display:block;background:var(--white);border:1.5px solid #e0edf2;border-radius:14px;padding:18px 20px;margin-bottom:14px;text-decoration:none;color:inherit;transition:border-color .15s;}
+.choice-card:hover{border-color:var(--blue);}
+.choice-card h2{font-size:1.05rem;color:var(--blue);margin:0 0 6px;}
+.choice-card p{margin:0;font-size:.87rem;color:var(--muted);line-height:1.5;}
+.empty-note{color:var(--muted);font-size:.9rem;}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="settings-page">
+  <div class="page-title">Add a role to this account</div>
+  <p class="page-sub">Only new roles are shown below — you already have the others.</p>
+
+  {% if can_add_tradie %}
+  <a href="{% url 'add_role_tradie' %}" class="choice-card">
+    <h2>Local Professional</h2>
+    <p>Find work and send quotes to clients across Fiji.</p>
+  </a>
+  {% endif %}
+
+  {% if can_add_supplier %}
+  <a href="{% url 'add_role_supplier' %}" class="choice-card">
+    <h2>Supplier</h2>
+    <p>Supply goods and services, and respond to enquiries with itemised quotes.</p>
+  </a>
+  {% endif %}
+
+  {% if nothing_to_add %}
+  <p class="empty-note">You already have every role available to add here. Looking to link a separate account instead? <a href="{% url 'merge_account' %}">Merge an existing account</a>.</p>
+  {% endif %}
+</div>
+{% endblock %}

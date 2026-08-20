@@ -48,7 +48,13 @@ from .models import (
     InvoiceNotification,
     User,
     UserBlock,
+    UserCapability,
+    Workspace,
+    WorkspaceMembership,
+    BusinessProfile,
+    LinkedAccount,
 )
+from . import workspaces
 from .utils import (
     build_invoice_line_description,
     create_invoice_with_lines,
@@ -192,6 +198,8 @@ class UserAdmin(BaseUserAdmin):
                         service_towns=selected_towns or ([user.town] if user.town else []),
                         verification_status=TradieProfile.VERIFICATION_PENDING,
                     )
+                    workspaces.ensure_user_capability(user, can_offer_services=True)
+                    workspaces.create_individual_provider_workspace(user)
                 notify_client_migrated_to_tradie(user)
                 messages.success(request, f'{user} migrated to a local professional account and notified by email.')
                 return redirect(reverse('admin:marketplace_tradieprofile_change', args=[user.tradie_profile.pk]))
@@ -294,6 +302,79 @@ class TradieProfileAdmin(admin.ModelAdmin):
     plumber_licence_link.short_description = 'Plumber Licence (view)'
 
 
+# ── Workspaces (multi-workspace accounts) ────────────────────────────────────
+
+@admin.register(UserCapability)
+class UserCapabilityAdmin(admin.ModelAdmin):
+    list_display  = ['user', 'can_hire', 'can_offer_services', 'can_manage_businesses', 'phone_verified', 'onboarding_completed']
+    list_select_related = ['user']
+    list_filter   = ['can_hire', 'can_offer_services', 'can_manage_businesses', 'phone_verified', 'onboarding_completed']
+    search_fields = ['user__email', 'user__first_name', 'user__last_name']
+    raw_id_fields = ['user']
+    readonly_fields = ['created_at', 'updated_at']
+
+
+class WorkspaceMembershipInline(admin.TabularInline):
+    model = WorkspaceMembership
+    extra = 0
+    raw_id_fields = ['user']
+    fields = ['user', 'role', 'active', 'created_at']
+    readonly_fields = ['created_at']
+
+
+@admin.register(Workspace)
+class WorkspaceAdmin(admin.ModelAdmin):
+    list_display  = ['display_name', 'workspace_type', 'owner', 'active', 'created_at']
+    list_select_related = ['owner']
+    list_filter   = ['workspace_type', 'active', 'created_at']
+    search_fields = ['display_name', 'slug', 'owner__email', 'owner__first_name', 'owner__last_name']
+    raw_id_fields = ['owner']
+    readonly_fields = ['slug', 'created_at', 'updated_at']
+    fieldsets = (
+        ('Workspace', {'fields': ('owner', 'workspace_type', 'display_name', 'slug', 'profile_image', 'active')}),
+        ('Timestamps', {'fields': ('created_at', 'updated_at')}),
+    )
+    inlines = [WorkspaceMembershipInline]
+
+
+@admin.register(WorkspaceMembership)
+class WorkspaceMembershipAdmin(admin.ModelAdmin):
+    list_display  = ['workspace', 'user', 'role', 'active', 'created_at']
+    list_select_related = ['workspace', 'user']
+    list_filter   = ['role', 'active', 'created_at']
+    search_fields = ['workspace__display_name', 'user__email']
+    raw_id_fields = ['workspace', 'user']
+    readonly_fields = ['created_at']
+
+
+@admin.register(BusinessProfile)
+class BusinessProfileAdmin(admin.ModelAdmin):
+    list_display  = ['trading_name', 'workspace', 'town', 'verification_status', 'verified_at']
+    list_select_related = ['workspace']
+    list_filter   = ['verification_status', 'town']
+    search_fields = ['trading_name', 'legal_name', 'workspace__display_name', 'tin', 'fiji_business_registration_number']
+    raw_id_fields = ['workspace']
+    readonly_fields = ['created_at', 'updated_at']
+    fieldsets = (
+        ('Workspace', {'fields': ('workspace',)}),
+        ('Business Details', {'fields': ('legal_name', 'trading_name', 'business_description', 'business_phone', 'business_email')}),
+        ('Location & Service Area', {'fields': ('town', 'service_radius_km')}),
+        ('Fiji Business Identifiers', {'fields': ('tin', 'fiji_business_registration_number', 'fiji_trade_licence_number')}),
+        ('Facebook Page', {'fields': ('facebook_page_url', 'facebook_page_id')}),
+        ('Verification', {'fields': ('verification_status', 'verified_at')}),
+        ('Timestamps', {'fields': ('created_at', 'updated_at')}),
+    )
+
+
+@admin.register(LinkedAccount)
+class LinkedAccountAdmin(admin.ModelAdmin):
+    list_display  = ['user_a', 'user_b', 'created_at']
+    list_select_related = ['user_a', 'user_b']
+    search_fields = ['user_a__email', 'user_b__email']
+    raw_id_fields = ['user_a', 'user_b']
+    readonly_fields = ['created_at']
+
+
 # ── Task ──────────────────────────────────────────────────────────────────────
 
 class HasQuotingAppointmentFilter(admin.SimpleListFilter):
@@ -388,14 +469,14 @@ class TaskAdmin(admin.ModelAdmin):
         'backdoor_monitoring_flag', 'backdoor_reviewed', 'created_at',
     ]
     search_fields = ['title', 'client__email', 'description']
-    raw_id_fields = ['client', 'assigned_tradie', 'removed_by', 'backdoor_reviewed_by']
+    raw_id_fields = ['client', 'client_workspace', 'assigned_tradie', 'assigned_provider_workspace', 'removed_by', 'backdoor_reviewed_by']
     readonly_fields = ['created_at', 'completed_at']
     fieldsets = (
         ('Task Info', {'fields': ('title', 'category', 'categories', 'description')}),
         ('Location & Schedule', {'fields': ('town', 'preferred_date', 'preferred_date_end', 'completed_at')}),
         ('Budget & Value', {'fields': ('budget', 'final_job_value', 'budget_type')}),
         ('Materials & Inclusions', {'fields': ('materials_responsibility', 'meals_provided', 'parking_available_flag', 'site_access_available', 'tools_required', 'rubbish_removal_required', 'after_hours_required', 'on_site_inspection_required', 'delivery_required', 'clean_up_required', 'client_provide_photos', 'warranty_followup_requested', 'materials_notes', 'parking_notes', 'access_notes', 'special_instructions')}),
-        ('Assignment & Status', {'fields': ('client', 'assigned_tradie', 'status')}),
+        ('Assignment & Status', {'fields': ('client', 'client_workspace', 'assigned_tradie', 'assigned_provider_workspace', 'status')}),
         ('Removal & Platform Circumvention Monitoring', {'fields': ('removed_at', 'removed_by', 'removal_reason', 'cancellation_reason', 'backdoor_monitoring_flag', 'backdoor_monitoring_note', 'backdoor_reviewed', 'backdoor_reviewed_at', 'backdoor_reviewed_by')}),
         ('Timestamps', {'fields': ('created_at',)}),
     )
@@ -438,10 +519,10 @@ class QuoteAdmin(admin.ModelAdmin):
     list_select_related = ['task', 'tradie']
     list_filter   = ['status', 'include_platform_fee', 'quote_includes', 'created_at']
     search_fields = ['task__title', 'tradie__email']
-    raw_id_fields = ['task', 'tradie']
+    raw_id_fields = ['task', 'tradie', 'provider_workspace']
     readonly_fields = ['created_at', 'applied_fee_summary']
     fieldsets = (
-        ('Quote Assignment', {'fields': ('task', 'tradie')}),
+        ('Quote Assignment', {'fields': ('task', 'tradie', 'provider_workspace')}),
         ('Quote Pricing', {'fields': ('minimum_take_home_amount', 'customer_facing_quote', 'price', 'include_platform_fee')}),
         ('Fee Applied', {
             'fields': ('applied_fee_summary', 'estimated_provider_take_home', 'client_quote_total', 'estimated_tradie_take_home'),
@@ -544,10 +625,10 @@ class PublicReviewAdmin(admin.ModelAdmin):
     list_select_related = ['ratee', 'rater', 'task']
     list_filter   = [HasTaskFilter, 'created_at']
     search_fields = ['rater__email', 'ratee__email', 'task__title', 'admin_note']
-    raw_id_fields = ['task', 'rater', 'ratee']
+    raw_id_fields = ['task', 'rater', 'ratee', 'reviewer_workspace', 'reviewed_workspace']
     readonly_fields = ['created_at', 'overall_display']
     fieldsets = (
-        ('Review Assignment', {'fields': ('task', 'rater', 'ratee'), 'description': (
+        ('Review Assignment', {'fields': ('task', 'rater', 'ratee', 'reviewer_workspace', 'reviewed_workspace'), 'description': (
             'To edit or correct an existing review (e.g. a malicious one), just change its scores/comment below. '
             'To add a NEW review — e.g. for a local pro you\'ve worked with before they joined the platform — '
             'leave "task" blank, pick any rater (yourself or the client who worked with them), and fill in '
@@ -588,9 +669,9 @@ class PrivateReviewAdmin(admin.ModelAdmin):
     """
     list_display  = ['task', 'rater', 'ratee', 'access_readiness', 'payment', 'conduct', 'created_at']
     search_fields = ['rater__email', 'ratee__email', 'task__title']
-    raw_id_fields = ['task', 'rater', 'ratee']
+    raw_id_fields = ['task', 'rater', 'ratee', 'reviewer_workspace', 'reviewed_workspace']
     # Read-only in the list view to discourage accidental changes
-    readonly_fields = ['task', 'rater', 'ratee', 'created_at']
+    readonly_fields = ['task', 'rater', 'ratee', 'reviewer_workspace', 'reviewed_workspace', 'created_at']
 
     def has_add_permission(self, request):
         return False  # created only via the rate_client view
@@ -668,10 +749,10 @@ class PlatformFeeAdmin(admin.ModelAdmin):
     list_select_related = ['task', 'tradie']
     list_filter = ['status', 'tradie', 'created_at']
     search_fields = ['task__title', 'tradie__email']
-    raw_id_fields = ['task', 'tradie']
+    raw_id_fields = ['task', 'tradie', 'provider_workspace']
     readonly_fields = ['created_at']
     fieldsets = (
-        ('Task & Tradie', {'fields': ('task', 'tradie')}),
+        ('Task & Tradie', {'fields': ('task', 'tradie', 'provider_workspace')}),
         ('Fee Details', {'fields': ('final_job_value', 'fee_rate', 'fee_cap', 'gross_fee_amount', 'discount_amount', 'fee_amount')}),
         ('Status', {'fields': ('status',)}),
         ('Timestamps', {'fields': ('created_at',)}),
@@ -750,10 +831,10 @@ class InvoiceAdmin(admin.ModelAdmin):
         'period_start', 'due_date', 'created_at',
     ]
     search_fields = ['invoice_number', 'tradie__email', 'tradie__first_name', 'tradie__last_name']
-    raw_id_fields = ['tradie']
+    raw_id_fields = ['tradie', 'provider_workspace']
     readonly_fields = ['invoice_number', 'created_at', 'sent_at', 'paid_at']
     fieldsets = (
-        ('Invoice Details', {'fields': ('invoice_number', 'tradie', 'period_start', 'period_end', 'total_amount')}),
+        ('Invoice Details', {'fields': ('invoice_number', 'tradie', 'provider_workspace', 'period_start', 'period_end', 'total_amount')}),
         ('Status', {'fields': ('status', 'due_date')}),
         ('Timestamps', {'fields': ('created_at', 'sent_at', 'paid_at')}),
     )

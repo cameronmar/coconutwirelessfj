@@ -1,0 +1,55 @@
+{% extends "marketplace/base.html" %}
+{% block title %}Manage Linked Logins – The Coconut Wireless Network{% endblock %}
+
+{% block extra_css %}
+<style>
+.settings-page{max-width:640px;margin:0 auto;padding:28px 20px 50px;}
+.page-title{font-size:1.4rem;font-weight:700;margin:0 0 4px;}
+.page-sub{color:var(--muted);font-size:.9rem;margin:0 0 22px;}
+.login-row{background:var(--white);border:1.5px solid #e0edf2;border-radius:14px;padding:16px 18px;margin-bottom:12px;}
+.login-row .row-top{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;}
+.login-row .email{font-weight:600;}
+.badge{font-size:.75rem;border-radius:6px;padding:3px 8px;font-weight:600;}
+.badge-active{background:#e8f7ff;color:var(--blue);}
+.badge-disabled{background:#f2f2f2;color:var(--muted);}
+.badge-self{background:#f0f9f0;color:#2f6b2f;}
+.clear-form{display:flex;gap:8px;margin-top:10px;align-items:flex-start;}
+.clear-form input[type=password]{flex:1;}
+.clear-note{color:var(--muted);font-size:.82rem;margin-top:8px;}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="settings-page">
+  <div class="page-title">Linked logins</div>
+  <p class="page-sub">Every login below reaches the same account. At least one must always stay active.</p>
+
+  {% for row in rows %}
+  <div class="login-row">
+    <div class="row-top">
+      <span class="email">{{ row.user.email }}</span>
+      {% if row.is_self %}<span class="badge badge-self">Current login</span>{% endif %}
+      {% if row.usable %}<span class="badge badge-active">Active</span>{% else %}<span class="badge badge-disabled">Disabled</span>{% endif %}
+    </div>
+    {% if row.usable %}
+      {% if row.can_clear %}
+      <form method="post" action="{% url 'clear_linked_login' row.user.pk %}" class="clear-form">
+        {% csrf_token %}
+        {{ row.form.password }}
+        <button type="submit" class="btn btn-sm" style="background:#fff2f2;color:#8a1a1a;">Clear this login</button>
+      </form>
+      {% for e in row.form.password.errors %}<div class="field-error">{{e}}</div>{% endfor %}
+      {% elif rows|length > 1 %}
+      <p class="clear-note" title="At least one login must remain active">At least one login must remain active — this can't be cleared right now.</p>
+      {% endif %}
+    {% endif %}
+  </div>
+  {% endfor %}
+
+  {% if rows|length == 1 %}
+  <p class="page-sub">You haven't linked any other accounts yet. <a href="{% url 'account_linking_hub' %}">Add or merge another account</a>.</p>
+  {% else %}
+  <p class="page-sub">Want to add another login instead? <a href="{% url 'account_linking_hub' %}">Add or merge another account</a>.</p>
+  {% endif %}
+</div>
+{% endblock %}

@@ -3,11 +3,13 @@ import os
 import subprocess
 import sys
 from decimal import Decimal
+from io import StringIO
 from pathlib import Path
 from unittest import mock
 
-from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.exceptions import ValidationError
+from django.core.files.uploadedfile import SimpleUploadedFile
+from django.core.management import call_command
 from django.db import DatabaseError, IntegrityError, transaction
 from django.test import Client, TestCase, override_settings
 from django.urls import reverse
@@ -15,9 +17,11 @@ from django.utils import timezone as django_timezone
 
 from .forms import ChangePasswordForm, MarketOrderForm, ServiceAreaForm
 from .models import (
+    BusinessProfile,
     ContentReport,
     Invoice,
     InvoiceLine,
+    LinkedAccount,
     MarketListing,
     MarketOrder,
     Message,
@@ -25,6 +29,7 @@ from .models import (
     PlatformFee,
     PlatformSettings,
     PromoCode,
+    PublicReview,
     Quote,
     QuotingAppointment,
     QuotingAppointmentSlot,
@@ -35,7 +40,11 @@ from .models import (
     TradieProfile,
     User,
     UserBlock,
+    UserCapability,
+    Workspace,
+    WorkspaceMembership,
 )
+from . import workspaces
 from .utils import (
     calculate_market_price_per_unit,
     calculate_market_take_home,
@@ -2890,3 +2899,1105 @@ class ContentReportAdminTests(TestCase):
         self.assertEqual(self.report.status, ContentReport.STATUS_ACTIONED)
         self.assertEqual(self.report.reviewed_by, self.admin_user)
         self.assertIsNotNone(self.report.reviewed_at)
+# ── Workspaces (multi-workspace accounts) ────────────────────────────────────
+
+def _request_with_session(user):
+    """RequestFactory requests have no session/auth middleware attached by
+    default — build one by hand for workspaces.py functions that read/write
+    request.session."""
+    from django.test import RequestFactory
+    request = RequestFactory().get('/')
+    from django.contrib.sessions.middleware import SessionMiddleware
+    SessionMiddleware(lambda r: None).process_request(request)
+    request.session.save()
+    request.user = user
+    return request
+
+
+class WorkspaceModelTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email='ws-model@example.com', password='pass12345',
+            first_name='Ws', last_name='Model', role=User.ROLE_CLIENT, town='Suva',
+        )
+
+    def test_one_client_workspace_per_user(self):
+        Workspace.objects.create(owner=self.user, workspace_type=Workspace.TYPE_CLIENT, display_name='A', slug='wmt-a')
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                Workspace.objects.create(owner=self.user, workspace_type=Workspace.TYPE_CLIENT, display_name='B', slug='wmt-b')
+
+    def test_one_individual_provider_workspace_per_user(self):
+        Workspace.objects.create(owner=self.user, workspace_type=Workspace.TYPE_INDIVIDUAL_PROVIDER, display_name='A', slug='wmt-ip-a')
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                Workspace.objects.create(owner=self.user, workspace_type=Workspace.TYPE_INDIVIDUAL_PROVIDER, display_name='B', slug='wmt-ip-b')
+
+    def test_multiple_business_workspaces_allowed(self):
+        Workspace.objects.create(owner=self.user, workspace_type=Workspace.TYPE_BUSINESS, display_name='Biz A', slug='wmt-biz-a')
+        Workspace.objects.create(owner=self.user, workspace_type=Workspace.TYPE_BUSINESS, display_name='Biz B', slug='wmt-biz-b')
+        self.assertEqual(
+            Workspace.objects.filter(owner=self.user, workspace_type=Workspace.TYPE_BUSINESS).count(), 2
+        )
+
+    def test_workspace_membership_unique_together(self):
+        ws = Workspace.objects.create(owner=self.user, workspace_type=Workspace.TYPE_CLIENT, display_name='A', slug='wmt-c')
+        WorkspaceMembership.objects.create(workspace=ws, user=self.user, role=WorkspaceMembership.ROLE_OWNER)
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                WorkspaceMembership.objects.create(workspace=ws, user=self.user, role=WorkspaceMembership.ROLE_MANAGER)
+
+    def test_workspace_membership_rejects_invalid_role(self):
+        ws = Workspace.objects.create(owner=self.user, workspace_type=Workspace.TYPE_CLIENT, display_name='A', slug='wmt-d')
+        membership = WorkspaceMembership(workspace=ws, user=self.user, role='not-a-real-role')
+        with self.assertRaises(ValidationError):
+            membership.full_clean()
+
+    def test_business_profile_rejects_non_business_workspace(self):
+        ws = Workspace.objects.create(owner=self.user, workspace_type=Workspace.TYPE_CLIENT, display_name='A', slug='wmt-e')
+        profile = BusinessProfile(workspace=ws, trading_name='Test Biz')
+        with self.assertRaises(ValidationError):
+            profile.full_clean()
+
+    def test_business_profile_accepts_business_workspace(self):
+        ws = Workspace.objects.create(owner=self.user, workspace_type=Workspace.TYPE_BUSINESS, display_name='Biz', slug='wmt-f')
+        profile = BusinessProfile(workspace=ws, trading_name='Test Biz')
+        profile.full_clean()  # should not raise
+
+    def test_save_auto_generates_slug_when_blank(self):
+        # Regression: slug is editable=False (never on any ModelForm,
+        # including the admin's "Add Workspace" page), so anything that
+        # creates a Workspace without going through workspaces.py's
+        # create_*_workspace() helpers used to insert a blank slug —
+        # harmless for the first row, then a raw IntegrityError on every
+        # one after it (duplicate '' slugs). Workspace.save() now generates
+        # one itself whenever it's missing.
+        ws = Workspace.objects.create(owner=self.user, workspace_type=Workspace.TYPE_BUSINESS, display_name='Auto Slug Co')
+        self.assertEqual(ws.slug, 'auto-slug-co')
+
+    def test_save_slug_collision_appends_suffix_even_without_helper(self):
+        other = User.objects.create_user(
+            email='ws-model-2@example.com', password='p',
+            first_name='Ws', last_name='Model', role=User.ROLE_CLIENT, town='Suva',
+        )
+        ws1 = Workspace.objects.create(owner=self.user, workspace_type=Workspace.TYPE_BUSINESS, display_name='Same Name Ltd')
+        ws2 = Workspace.objects.create(owner=other, workspace_type=Workspace.TYPE_BUSINESS, display_name='Same Name Ltd')
+        self.assertEqual(ws1.slug, 'same-name-ltd')
+        self.assertEqual(ws2.slug, 'same-name-ltd-2')
+
+    def test_save_never_overwrites_an_existing_slug(self):
+        ws = Workspace.objects.create(owner=self.user, workspace_type=Workspace.TYPE_BUSINESS, display_name='Stable Slug Co')
+        original_slug = ws.slug
+        ws.display_name = 'Renamed Company'
+        ws.save()
+        ws.refresh_from_db()
+        self.assertEqual(ws.slug, original_slug)
+
+    def test_admin_add_workspace_page_works_for_a_second_colliding_display_name(self):
+        # Regression test for the same bug reproduced manually against a
+        # live admin session: two workspaces with the same display_name,
+        # created via the actual admin "Add" view (not the ORM directly).
+        admin_user = User.objects.create_superuser(email='ws-admin@example.com', password='pass12345')
+        other = User.objects.create_user(
+            email='ws-model-3@example.com', password='p',
+            first_name='Ws', last_name='Model', role=User.ROLE_CLIENT, town='Suva',
+        )
+        self.client.login(username=admin_user.email, password='pass12345')
+        post_data = {
+            'workspace_type': Workspace.TYPE_BUSINESS, 'display_name': 'Colliding Name', 'active': 'on',
+            'memberships-TOTAL_FORMS': '0', 'memberships-INITIAL_FORMS': '0',
+            'memberships-MIN_NUM_FORMS': '0', 'memberships-MAX_NUM_FORMS': '1000',
+        }
+        r1 = self.client.post('/admin/marketplace/workspace/add/', {**post_data, 'owner': self.user.pk}, secure=True)
+        self.assertEqual(r1.status_code, 302)
+        r2 = self.client.post('/admin/marketplace/workspace/add/', {**post_data, 'owner': other.pk}, secure=True)
+        self.assertEqual(r2.status_code, 302)
+        slugs = set(Workspace.objects.filter(display_name='Colliding Name').values_list('slug', flat=True))
+        self.assertEqual(slugs, {'colliding-name', 'colliding-name-2'})
+
+
+class WorkspaceRaceConditionTests(TestCase):
+    """_create_workspace's IntegrityError handling — see workspaces.py for
+    why blindly retrying isn't safe when the failure is a genuine race on
+    the owner+type uniqueness constraint rather than a slug collision."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email='race@example.com', password='p',
+            first_name='Race', last_name='User', role=User.ROLE_CLIENT, town='Suva',
+        )
+
+    def test_create_workspace_returns_existing_row_on_owner_type_race(self):
+        # Simulate the race: a workspace already exists for this owner+type
+        # (as if another concurrent request just committed one), but
+        # _create_workspace is called directly — bypassing
+        # create_client_workspace's own pre-check — to force it down the
+        # IntegrityError branch instead of the normal idempotent early-return.
+        existing = Workspace.objects.create(owner=self.user, workspace_type=Workspace.TYPE_CLIENT, display_name='Existing')
+        result = workspaces._create_workspace(self.user, Workspace.TYPE_CLIENT, 'Different Display Name')
+        self.assertEqual(result.pk, existing.pk)
+        self.assertEqual(Workspace.objects.filter(owner=self.user, workspace_type=Workspace.TYPE_CLIENT).count(), 1)
+
+
+class WorkspaceOwnershipValidationTests(TestCase):
+    """clean() on Task/Quote/PlatformFee/Invoice/PublicReview/PrivateReview
+    rejects a workspace FK whose owner doesn't match the legacy user FK it's
+    meant to mirror — this is the one place a human (via the admin) could
+    introduce a mismatch by hand, since the application write paths always
+    derive the workspace from the same user."""
+
+    def setUp(self):
+        self.client_user = User.objects.create_user(
+            email='owncheck-client@example.com', password='p',
+            first_name='Own', last_name='Client', role=User.ROLE_CLIENT, town='Suva',
+        )
+        self.other_client_user = User.objects.create_user(
+            email='owncheck-other@example.com', password='p',
+            first_name='Other', last_name='Client', role=User.ROLE_CLIENT, town='Suva',
+        )
+        self.tradie_user = User.objects.create_user(
+            email='owncheck-tradie@example.com', password='p',
+            first_name='Own', last_name='Tradie', role=User.ROLE_TRADIE, town='Suva',
+        )
+        TradieProfile.objects.create(user=self.tradie_user, trades=['cleaning'], service_towns=['Suva'])
+
+        self.client_ws = workspaces.create_client_workspace(self.client_user)
+        self.other_client_ws = workspaces.create_client_workspace(self.other_client_user)
+        self.provider_ws = workspaces.create_individual_provider_workspace(self.tradie_user)
+
+        self.task = Task.objects.create(
+            client=self.client_user, title='Ownership check', category='cleaning',
+            description='d', budget=Decimal('100'), town='Suva',
+        )
+
+    def test_task_client_workspace_mismatch_rejected(self):
+        task = Task(client=self.client_user, client_workspace=self.other_client_ws)
+        with self.assertRaises(ValidationError):
+            task.clean()
+
+    def test_task_client_workspace_match_accepted(self):
+        Task(client=self.client_user, client_workspace=self.client_ws).clean()  # no exception
+
+    def test_task_assigned_provider_workspace_mismatch_rejected(self):
+        other_tradie = User.objects.create_user(
+            email='owncheck-other-tradie@example.com', password='p',
+            first_name='Other', last_name='Tradie', role=User.ROLE_TRADIE, town='Suva',
+        )
+        TradieProfile.objects.create(user=other_tradie, trades=['cleaning'], service_towns=['Suva'])
+        other_provider_ws = workspaces.create_individual_provider_workspace(other_tradie)
+        task = Task(
+            client=self.client_user, assigned_tradie=self.tradie_user,
+            assigned_provider_workspace=other_provider_ws,
+        )
+        with self.assertRaises(ValidationError):
+            task.clean()
+
+    def test_quote_provider_workspace_mismatch_rejected(self):
+        quote = Quote(task=self.task, tradie=self.tradie_user, provider_workspace=self.other_client_ws)
+        with self.assertRaises(ValidationError):
+            quote.clean()
+
+    def test_platform_fee_provider_workspace_mismatch_rejected(self):
+        fee = PlatformFee(task=self.task, tradie=self.tradie_user, provider_workspace=self.other_client_ws)
+        with self.assertRaises(ValidationError):
+            fee.clean()
+
+    def test_invoice_provider_workspace_mismatch_rejected(self):
+        invoice = Invoice(tradie=self.tradie_user, provider_workspace=self.other_client_ws)
+        with self.assertRaises(ValidationError):
+            invoice.clean()
+
+    def test_public_review_workspace_mismatch_rejected(self):
+        review = PublicReview(
+            task=self.task, rater=self.client_user, ratee=self.tradie_user,
+            reviewer_workspace=self.other_client_ws, reviewed_workspace=self.provider_ws,
+        )
+        with self.assertRaises(ValidationError):
+            review.clean()
+        review = PublicReview(
+            task=self.task, rater=self.client_user, ratee=self.tradie_user,
+            reviewer_workspace=self.client_ws, reviewed_workspace=self.other_client_ws,
+        )
+        with self.assertRaises(ValidationError):
+            review.clean()
+
+    def test_private_review_workspace_mismatch_rejected(self):
+        from .models import PrivateReview
+        review = PrivateReview(
+            task=self.task, rater=self.tradie_user, ratee=self.client_user,
+            reviewer_workspace=self.other_client_ws, reviewed_workspace=self.client_ws,
+        )
+        with self.assertRaises(ValidationError):
+            review.clean()
+
+
+class WorkspaceServiceTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email='svc@example.com', password='p',
+            first_name='Svc', last_name='User', role=User.ROLE_CLIENT, town='Suva',
+        )
+
+    def test_create_client_workspace_is_idempotent(self):
+        ws1 = workspaces.create_client_workspace(self.user)
+        ws2 = workspaces.create_client_workspace(self.user)
+        self.assertEqual(ws1.pk, ws2.pk)
+        self.assertEqual(
+            Workspace.objects.filter(owner=self.user, workspace_type=Workspace.TYPE_CLIENT).count(), 1
+        )
+
+    def test_create_workspace_creates_owner_membership(self):
+        ws = workspaces.create_client_workspace(self.user)
+        self.assertTrue(
+            WorkspaceMembership.objects.filter(
+                workspace=ws, user=self.user, role=WorkspaceMembership.ROLE_OWNER
+            ).exists()
+        )
+
+    def test_slug_collision_appends_numeric_suffix(self):
+        other = User.objects.create_user(
+            email='svc2@example.com', password='p',
+            first_name='Svc', last_name='User', role=User.ROLE_CLIENT, town='Suva',
+        )
+        ws1 = workspaces.create_client_workspace(self.user)   # display_name 'Svc User'
+        ws2 = workspaces.create_client_workspace(other)       # same display_name 'Svc User'
+        self.assertNotEqual(ws1.slug, ws2.slug)
+        self.assertEqual(ws2.slug, f'{ws1.slug}-2')
+
+    def test_get_workspace_returns_none_when_absent(self):
+        self.assertIsNone(workspaces.get_individual_provider_workspace(self.user))
+
+    def test_ensure_user_capability_only_flips_can_offer_services_on(self):
+        cap = workspaces.ensure_user_capability(self.user)
+        self.assertTrue(cap.can_hire)
+        self.assertFalse(cap.can_offer_services)
+        cap = workspaces.ensure_user_capability(self.user, can_offer_services=True)
+        self.assertTrue(cap.can_offer_services)
+        self.assertEqual(UserCapability.objects.filter(user=self.user).count(), 1)
+
+    def test_generate_unique_workspace_slug_preview_matches_first_real_save(self):
+        preview = workspaces.generate_unique_workspace_slug('Preview Co')
+        self.assertEqual(preview, 'preview-co')
+        # Check the preview against the real generator's result BEFORE
+        # creating the row — afterward, the preview would correctly (and
+        # differently) report 'svc-user-2', since 'svc-user' is now taken.
+        preview_for_user = workspaces.generate_unique_workspace_slug('Svc User')
+        ws = workspaces.create_client_workspace(self.user)
+        self.assertEqual(ws.slug, preview_for_user)
+
+    def test_generate_unique_workspace_slug_preview_accounts_for_existing_rows(self):
+        workspaces.create_client_workspace(self.user)  # slug: 'svc-user'
+        preview = workspaces.generate_unique_workspace_slug('Svc User')
+        self.assertEqual(preview, 'svc-user-2')
+
+
+class ActiveWorkspaceTests(TestCase):
+    def setUp(self):
+        self.tradie_user = User.objects.create_user(
+            email='active-tradie@example.com', password='p',
+            first_name='Active', last_name='Tradie', role=User.ROLE_TRADIE, town='Suva',
+        )
+        TradieProfile.objects.create(user=self.tradie_user, trades=['cleaning'], service_towns=['Suva'])
+        self.client_ws = workspaces.create_client_workspace(self.tradie_user)
+        self.provider_ws = workspaces.create_individual_provider_workspace(self.tradie_user)
+
+    def test_get_accessible_workspaces_returns_owned_workspaces(self):
+        accessible = workspaces.get_accessible_workspaces(self.tradie_user)
+        self.assertEqual(set(accessible.values_list('id', flat=True)), {self.client_ws.id, self.provider_ws.id})
+
+    def test_get_active_workspace_defaults_to_client_when_multiple_accessible(self):
+        request = _request_with_session(self.tradie_user)
+        self.assertEqual(workspaces.get_active_workspace(request), self.client_ws)
+
+    def test_set_active_workspace_switches_and_persists_in_session(self):
+        request = _request_with_session(self.tradie_user)
+        result = workspaces.set_active_workspace(request, self.provider_ws.id)
+        self.assertEqual(result, self.provider_ws)
+        self.assertEqual(request.session[workspaces.SESSION_KEY], self.provider_ws.id)
+        self.assertEqual(workspaces.get_active_workspace(request), self.provider_ws)
+
+    def test_set_active_workspace_rejects_workspace_the_user_cannot_access(self):
+        other_user = User.objects.create_user(
+            email='active-other@example.com', password='p',
+            first_name='Other', last_name='User', role=User.ROLE_CLIENT, town='Suva',
+        )
+        other_ws = workspaces.create_client_workspace(other_user)
+        request = _request_with_session(self.tradie_user)
+        self.assertIsNone(workspaces.set_active_workspace(request, other_ws.id))
+        self.assertNotIn(workspaces.SESSION_KEY, request.session)
+
+    def test_get_active_workspace_falls_back_safely_when_session_is_stale(self):
+        request = _request_with_session(self.tradie_user)
+        request.session[workspaces.SESSION_KEY] = 999999999  # no such workspace
+        self.assertEqual(workspaces.get_active_workspace(request), self.client_ws)
+
+    def test_single_accessible_workspace_is_auto_selected(self):
+        solo_user = User.objects.create_user(
+            email='active-solo@example.com', password='p',
+            first_name='Solo', last_name='User', role=User.ROLE_CLIENT, town='Suva',
+        )
+        solo_ws = workspaces.create_client_workspace(solo_user)
+        request = _request_with_session(solo_user)
+        self.assertEqual(workspaces.get_active_workspace(request), solo_ws)
+        self.assertEqual(request.session[workspaces.SESSION_KEY], solo_ws.id)
+
+
+@override_settings(
+    STORAGES={
+        'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
+        'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
+    }
+)
+class WorkspaceWiringIntegrationTests(TestCase):
+    """Confirms the real write paths (registration forms, post_task,
+    submit_quote, accept_quote, complete_task, rate_tradie, rate_client)
+    populate the new workspace FKs end-to-end, not just at the model level."""
+
+    def setUp(self):
+        self.client_user = User.objects.create_user(
+            email='wire-client@example.com', password='pass12345',
+            first_name='Wire', last_name='Client', role=User.ROLE_CLIENT, town='Suva',
+        )
+        self.tradie_user = User.objects.create_user(
+            email='wire-tradie@example.com', password='pass12345',
+            first_name='Wire', last_name='Tradie', role=User.ROLE_TRADIE, town='Suva',
+        )
+        self.tradie_profile = TradieProfile.objects.create(
+            # Not 'electrical'/'plumbing' — those are safety-critical trades
+            # that also require safety_documents_reviewed=True to quote,
+            # independent of verification_status (see can_quote()).
+            user=self.tradie_user, trades=['carpentry'], service_towns=['Suva'],
+            verification_status=TradieProfile.VERIFICATION_APPROVED,
+        )
+        # These two users were created directly via create_user() above (not
+        # through the real registration forms), so — same as any pre-Phase-1
+        # user before the 0035 backfill migration ran — they start out with
+        # no workspaces. Provision them explicitly to match the real
+        # post-migration/post-registration state this flow assumes.
+        workspaces.create_client_workspace(self.client_user)
+        workspaces.create_client_workspace(self.tradie_user)
+        workspaces.create_individual_provider_workspace(self.tradie_user)
+
+    def test_client_registration_provisions_capability_and_workspace(self):
+        response = self.client.post(
+            reverse('register_client'),
+            {
+                'first_name': 'New', 'last_name': 'Reg', 'email': 'new-reg-client@example.com',
+                'mobile': '+679 123 4567', 'town': 'Suva',
+                'password': 'pass12345', 'password_confirm': 'pass12345', 'accepted_terms': 'on',
+            },
+            secure=True,
+        )
+        self.assertEqual(response.status_code, 302)
+        user = User.objects.get(email='new-reg-client@example.com')
+        self.assertTrue(UserCapability.objects.filter(user=user, can_hire=True).exists())
+        self.assertTrue(Workspace.objects.filter(owner=user, workspace_type=Workspace.TYPE_CLIENT).exists())
+
+    def test_tradie_registration_provisions_both_workspaces(self):
+        response = self.client.post(
+            reverse('register_tradie'),
+            {
+                'first_name': 'New', 'last_name': 'Tradie', 'email': 'new-reg-tradie@example.com',
+                'mobile': '+679 111 2222', 'town': 'Suva',
+                'password': 'pass12345', 'password_confirm': 'pass12345',
+                'business_name': '', 'tin': '', 'years_experience': '1-3 years',
+                'bio': 'Bio', 'trades': ['cleaning'], 'service_towns': ['Suva'],
+                'accepted_terms': 'on', 'accepted_platform_circumvention': 'on', 'accepted_invoicing_terms': 'on',
+                'tin_letter': SimpleUploadedFile('tin.pdf', b'pdf-content', content_type='application/pdf'),
+            },
+            secure=True,
+        )
+        self.assertEqual(response.status_code, 302)
+        user = User.objects.get(email='new-reg-tradie@example.com')
+        capability = UserCapability.objects.get(user=user)
+        self.assertTrue(capability.can_hire)
+        self.assertTrue(capability.can_offer_services)
+        self.assertTrue(Workspace.objects.filter(owner=user, workspace_type=Workspace.TYPE_CLIENT).exists())
+        self.assertTrue(Workspace.objects.filter(owner=user, workspace_type=Workspace.TYPE_INDIVIDUAL_PROVIDER).exists())
+
+    def test_full_task_lifecycle_populates_workspace_fks_at_every_step(self):
+        self.client.login(username=self.client_user.email, password='pass12345')
+        post_response = self.client.post(
+            reverse('post_task'),
+            {
+                'title': 'Rewire lounge', 'category': 'electrical', 'description': 'Rewire the lounge',
+                'budget': '500.00', 'town': 'Suva', 'urgency': 'this_week', 'budget_type': 'fixed',
+            },
+            secure=True,
+        )
+        self.assertEqual(post_response.status_code, 302)
+        task = Task.objects.get(title='Rewire lounge')
+        client_ws = workspaces.get_client_workspace(self.client_user)
+        self.assertIsNotNone(client_ws)
+        self.assertEqual(task.client_workspace, client_ws)
+
+        self.client.logout()
+        self.client.login(username=self.tradie_user.email, password='pass12345')
+        quote_response = self.client.post(
+            reverse('submit_quote', args=[task.pk]),
+            {'price': '480.00', 'message': 'Can start Monday', 'quote_includes': 'labour_only'},
+            secure=True,
+        )
+        self.assertEqual(quote_response.status_code, 302)
+        quote = Quote.objects.get(task=task, tradie=self.tradie_user)
+        provider_ws = workspaces.get_individual_provider_workspace(self.tradie_user)
+        self.assertIsNotNone(provider_ws)
+        self.assertEqual(quote.provider_workspace, provider_ws)
+
+        self.client.logout()
+        self.client.login(username=self.client_user.email, password='pass12345')
+        accept_response = self.client.post(reverse('accept_quote', args=[task.pk, quote.pk]), secure=True)
+        self.assertEqual(accept_response.status_code, 302)
+        task.refresh_from_db()
+        self.assertEqual(task.assigned_provider_workspace, provider_ws)
+
+        complete_response = self.client.post(reverse('complete_task', args=[task.pk]), secure=True)
+        self.assertEqual(complete_response.status_code, 302)
+        fee = PlatformFee.objects.get(task=task)
+        self.assertEqual(fee.provider_workspace, provider_ws)
+
+        rate_tradie_response = self.client.post(
+            reverse('rate_tradie', args=[task.pk]),
+            {
+                'reliability_punctuality': 5, 'quote_price_accuracy': 5, 'value_for_money': 5,
+                'service_quality_workmanship': 5, 'communication_after_service': 5, 'timeline_schedule_delivery': 5,
+                'comment': 'Great work',
+            },
+            secure=True,
+        )
+        self.assertEqual(rate_tradie_response.status_code, 302)
+        public_review = PublicReview.objects.get(task=task)
+        self.assertEqual(public_review.reviewer_workspace, client_ws)
+        self.assertEqual(public_review.reviewed_workspace, provider_ws)
+
+        self.client.logout()
+        self.client.login(username=self.tradie_user.email, password='pass12345')
+        rate_client_response = self.client.post(
+            reverse('rate_client', args=[task.pk]),
+            {
+                'access_readiness': 5, 'scope_clarity': 5, 'communication': 5, 'payment': 5, 'conduct': 5,
+                'comment': 'Great client',
+            },
+            secure=True,
+        )
+        self.assertEqual(rate_client_response.status_code, 302)
+        from .models import PrivateReview
+        private_review = PrivateReview.objects.get(task=task)
+        self.assertEqual(private_review.reviewer_workspace, provider_ws)
+        self.assertEqual(private_review.reviewed_workspace, client_ws)
+
+    def test_admin_migrate_to_tradie_provisions_individual_provider_workspace(self):
+        admin_user = User.objects.create_superuser(email='wire-super@example.com', password='pass12345')
+        client_only_user = User.objects.create_user(
+            email='wire-migrate@example.com', password='pass12345',
+            first_name='Migrate', last_name='Me', role=User.ROLE_CLIENT, town='Suva',
+        )
+        self.client.login(username=admin_user.email, password='pass12345')
+        response = self.client.post(
+            reverse('admin:marketplace_user_migrate_to_tradie', args=[client_only_user.pk]),
+            {'trades': ['cleaning'], 'service_towns': ['Suva'], 'business_name': ''},
+            secure=True,
+        )
+        self.assertEqual(response.status_code, 302)
+        capability = UserCapability.objects.get(user=client_only_user)
+        self.assertTrue(capability.can_offer_services)
+        self.assertTrue(
+            Workspace.objects.filter(owner=client_only_user, workspace_type=Workspace.TYPE_INDIVIDUAL_PROVIDER).exists()
+        )
+
+
+class AuditWorkspaceRelationshipsCommandTests(TestCase):
+    def setUp(self):
+        self.client_user = User.objects.create_user(
+            email='audit-client@example.com', password='p',
+            first_name='Audit', last_name='Client', role=User.ROLE_CLIENT, town='Suva',
+        )
+        self.tradie_user = User.objects.create_user(
+            email='audit-tradie@example.com', password='p',
+            first_name='Audit', last_name='Tradie', role=User.ROLE_TRADIE, town='Suva',
+        )
+        TradieProfile.objects.create(user=self.tradie_user, trades=['cleaning'], service_towns=['Suva'])
+        self.client_ws = workspaces.create_client_workspace(self.client_user)
+        self.provider_ws = workspaces.create_individual_provider_workspace(self.tradie_user)
+        # Created via .objects.create() directly (bypassing post_task), so
+        # client_workspace starts out null — exactly the "missing_repairable" case.
+        self.task = Task.objects.create(
+            client=self.client_user, title='Audit task', category='cleaning',
+            description='d', budget=Decimal('100'), town='Suva',
+        )
+
+    def _run(self, repair=False):
+        out = StringIO()
+        call_command('audit_workspace_relationships', repair=repair, stdout=out)
+        return out.getvalue()
+
+    def test_dry_run_reports_without_modifying_data(self):
+        output = self._run(repair=False)
+        self.assertIn('missing_repairable=1', output)
+        self.task.refresh_from_db()
+        self.assertIsNone(self.task.client_workspace)
+
+    def test_repair_fills_resolvable_missing_fk(self):
+        output = self._run(repair=True)
+        self.assertIn('missing_repairable=1', output)
+        self.task.refresh_from_db()
+        self.assertEqual(self.task.client_workspace, self.client_ws)
+
+    def test_repair_never_touches_a_mismatched_fk(self):
+        other_user = User.objects.create_user(
+            email='audit-other@example.com', password='p',
+            first_name='Other', last_name='User', role=User.ROLE_CLIENT, town='Suva',
+        )
+        other_ws = workspaces.create_client_workspace(other_user)
+        # Bypass clean()/the write paths to simulate a hand-introduced mismatch.
+        Task.objects.filter(pk=self.task.pk).update(client_workspace=other_ws)
+
+        output = self._run(repair=True)
+        self.assertIn('mismatched=1', output)
+        self.task.refresh_from_db()
+        self.assertEqual(self.task.client_workspace_id, other_ws.id)
+
+
+# ── Multi-role accounts & account linking ────────────────────────────────────
+
+class MultiRoleAccountTests(TestCase):
+    """get_own_available_roles/switch_own_role — the mechanism that lets
+    User.role act as 'currently active role' for a multi-profile account."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email='multirole@example.com', password='p',
+            first_name='Multi', last_name='Role', role=User.ROLE_CLIENT, town='Suva',
+        )
+        workspaces.create_client_workspace(self.user)
+
+    def test_client_only_user_has_only_client_available(self):
+        self.assertEqual(workspaces.get_own_available_roles(self.user), [User.ROLE_CLIENT])
+
+    def test_tradie_profile_adds_tradie_role(self):
+        TradieProfile.objects.create(user=self.user, trades=['cleaning'], service_towns=['Suva'])
+        self.assertIn(User.ROLE_TRADIE, workspaces.get_own_available_roles(self.user))
+
+    def test_supplier_profile_adds_supplier_role(self):
+        SupplierProfile.objects.create(user=self.user, supply_categories=['building-materials'], service_towns=['Suva'])
+        self.assertIn(User.ROLE_SUPPLIER, workspaces.get_own_available_roles(self.user))
+
+    def test_switch_own_role_rejects_unavailable_role(self):
+        request = _request_with_session(self.user)
+        self.assertFalse(workspaces.switch_own_role(request, User.ROLE_TRADIE))
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.role, User.ROLE_CLIENT)
+
+    def test_switch_own_role_flips_role_and_active_workspace(self):
+        TradieProfile.objects.create(user=self.user, trades=['cleaning'], service_towns=['Suva'])
+        provider_ws = workspaces.create_individual_provider_workspace(self.user)
+        request = _request_with_session(self.user)
+        self.assertTrue(workspaces.switch_own_role(request, User.ROLE_TRADIE))
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.role, User.ROLE_TRADIE)
+        self.assertEqual(request.session[workspaces.SESSION_KEY], provider_ws.id)
+
+
+@override_settings(
+    STORAGES={
+        'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
+        'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
+    }
+)
+class AddRoleFormTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email='addrole@example.com', password='pass12345',
+            first_name='Add', last_name='Role', role=User.ROLE_CLIENT, town='Suva',
+        )
+        workspaces.create_client_workspace(self.user)
+
+    def _base_tradie_data(self, **overrides):
+        data = {
+            'email': self.user.email, 'use_same_credentials': 'on', 'password': 'pass12345',
+            'business_name': '', 'tin': '', 'years_experience': '1-3 years', 'bio': 'Bio',
+            'trades': ['cleaning'], 'service_towns': ['Suva'],
+            'accepted_platform_circumvention': 'on', 'accepted_invoicing_terms': 'on',
+        }
+        data.update(overrides)
+        return data
+
+    def test_wrong_password_rejected(self):
+        from .forms import AddTradieRoleForm
+        form = AddTradieRoleForm(
+            data=self._base_tradie_data(password='wrong'),
+            files={'tin_letter': SimpleUploadedFile('tin.pdf', b'%PDF-1.4', content_type='application/pdf')},
+            user=self.user,
+        )
+        self.assertFalse(form.is_valid())
+        self.assertIn('password', form.errors)
+
+    def test_mismatched_email_rejected_regardless_of_checkbox(self):
+        from .forms import AddTradieRoleForm
+        form = AddTradieRoleForm(
+            data=self._base_tradie_data(email='someone-else@example.com', use_same_credentials=''),
+            files={'tin_letter': SimpleUploadedFile('tin.pdf', b'%PDF-1.4', content_type='application/pdf')},
+            user=self.user,
+        )
+        self.assertFalse(form.is_valid())
+        self.assertIn('email', form.errors)
+
+    def test_missing_tin_letter_and_no_reuse_available_is_rejected(self):
+        from .forms import AddTradieRoleForm
+        form = AddTradieRoleForm(data=self._base_tradie_data(), files={}, user=self.user)
+        self.assertFalse(form.is_valid())
+        self.assertIn('tin_letter', form.errors)
+
+    def test_happy_path_creates_profile_and_workspace(self):
+        from .forms import AddTradieRoleForm
+        form = AddTradieRoleForm(
+            data=self._base_tradie_data(),
+            files={'tin_letter': SimpleUploadedFile('tin.pdf', b'%PDF-1.4', content_type='application/pdf')},
+            user=self.user,
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        form.save()
+        self.assertTrue(hasattr(self.user, 'tradie_profile'))
+        self.assertIsNotNone(workspaces.get_individual_provider_workspace(self.user))
+        self.assertIsNotNone(workspaces.get_client_workspace(self.user))
+
+    def test_reuses_tin_letter_from_supplier_profile_without_mutating_it(self):
+        from .forms import AddTradieRoleForm
+        SupplierProfile.objects.create(
+            user=self.user, supply_categories=['building-materials'], service_towns=['Suva'],
+            tin_letter=SimpleUploadedFile('supplier-tin.pdf', b'%PDF-1.4 supplier', content_type='application/pdf'),
+        )
+        form = AddTradieRoleForm(data=self._base_tradie_data(), files={}, user=self.user)
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertTrue(form.reused_tin_letter)
+        form.save()
+        self.assertTrue(self.user.tradie_profile.tin_letter)
+        self.user.supplier_profile.refresh_from_db()
+        self.assertTrue(self.user.supplier_profile.tin_letter)  # sibling untouched
+        self.assertNotEqual(self.user.tradie_profile.tin_letter.name, self.user.supplier_profile.tin_letter.name)
+
+    def _base_supplier_data(self, **overrides):
+        data = {
+            'email': self.user.email, 'use_same_credentials': 'on', 'password': 'pass12345',
+            'business_name': '', 'tin': '', 'bio': '',
+            'supply_categories': ['building-materials'], 'service_towns': ['Suva'],
+        }
+        data.update(overrides)
+        return data
+
+    def test_supplier_form_happy_path_creates_profile_and_workspace(self):
+        from .forms import AddSupplierRoleForm
+        form = AddSupplierRoleForm(
+            data=self._base_supplier_data(),
+            files={'tin_letter': SimpleUploadedFile('tin.pdf', b'%PDF-1.4', content_type='application/pdf')},
+            user=self.user,
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        form.save()
+        self.assertTrue(hasattr(self.user, 'supplier_profile'))
+        self.assertIsNotNone(workspaces.get_supplier_workspace(self.user))
+
+
+@override_settings(
+    STORAGES={
+        'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
+        'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
+    }
+)
+class AddRoleViewTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email='addroleview@example.com', password='pass12345',
+            first_name='Add', last_name='RoleView', role=User.ROLE_CLIENT, town='Suva',
+        )
+        workspaces.create_client_workspace(self.user)
+
+    def test_add_role_tradie_requires_login(self):
+        response = self.client.get(reverse('add_role_tradie'), secure=True)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(reverse('login'), response.url)
+
+    def test_add_role_tradie_rejects_if_already_a_tradie(self):
+        TradieProfile.objects.create(user=self.user, trades=['cleaning'], service_towns=['Suva'])
+        self.client.login(username=self.user.email, password='pass12345')
+        response = self.client.get(reverse('add_role_tradie'), secure=True)
+        self.assertEqual(response.status_code, 403)
+
+    def test_add_role_tradie_post_creates_profile_and_switches_role(self):
+        self.client.login(username=self.user.email, password='pass12345')
+        response = self.client.post(
+            reverse('add_role_tradie'),
+            {
+                'email': self.user.email, 'use_same_credentials': 'on', 'password': 'pass12345',
+                'business_name': '', 'tin': '', 'years_experience': '1-3 years', 'bio': 'Bio',
+                'trades': ['cleaning'], 'service_towns': ['Suva'],
+                'accepted_platform_circumvention': 'on', 'accepted_invoicing_terms': 'on',
+                'tin_letter': SimpleUploadedFile('tin.pdf', b'%PDF-1.4', content_type='application/pdf'),
+            },
+            secure=True,
+        )
+        self.assertEqual(response.status_code, 302)
+        self.user.refresh_from_db()
+        self.assertTrue(hasattr(self.user, 'tradie_profile'))
+        self.assertEqual(self.user.role, User.ROLE_TRADIE)
+
+    def test_add_role_tradie_form_renders(self):
+        self.client.login(username=self.user.email, password='pass12345')
+        response = self.client.get(reverse('add_role_tradie'), secure=True)
+        self.assertEqual(response.status_code, 200)
+
+    def test_add_role_supplier_form_renders(self):
+        self.client.login(username=self.user.email, password='pass12345')
+        response = self.client.get(reverse('add_role_supplier'), secure=True)
+        self.assertEqual(response.status_code, 200)
+
+    def test_account_linking_hub_renders(self):
+        self.client.login(username=self.user.email, password='pass12345')
+        response = self.client.get(reverse('account_linking_hub'), secure=True)
+        self.assertEqual(response.status_code, 200)
+
+    def test_add_role_choose_renders(self):
+        self.client.login(username=self.user.email, password='pass12345')
+        response = self.client.get(reverse('add_role_choose'), secure=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Local Professional')
+        self.assertContains(response, 'Supplier')
+
+    def test_add_role_choose_hides_held_roles(self):
+        TradieProfile.objects.create(user=self.user, trades=['cleaning'], service_towns=['Suva'])
+        self.client.login(username=self.user.email, password='pass12345')
+        response = self.client.get(reverse('add_role_choose'), secure=True)
+        self.assertNotContains(response, 'href="{}"'.format(reverse('add_role_tradie')))
+
+    @override_settings(SUPPLIERS_ENABLED=False)
+    def test_add_role_choose_hides_supplier_when_flag_disabled(self):
+        self.client.login(username=self.user.email, password='pass12345')
+        response = self.client.get(reverse('add_role_choose'), secure=True)
+        self.assertNotContains(response, 'href="{}"'.format(reverse('add_role_supplier')))
+
+    @override_settings(SUPPLIERS_ENABLED=False)
+    def test_add_role_supplier_404s_when_flag_disabled(self):
+        self.client.login(username=self.user.email, password='pass12345')
+        response = self.client.get(reverse('add_role_supplier'), secure=True)
+        self.assertEqual(response.status_code, 404)
+
+    def test_manage_linked_logins_renders(self):
+        self.client.login(username=self.user.email, password='pass12345')
+        response = self.client.get(reverse('manage_linked_logins'), secure=True)
+        self.assertEqual(response.status_code, 200)
+
+    def test_merge_account_form_renders(self):
+        self.client.login(username=self.user.email, password='pass12345')
+        response = self.client.get(reverse('merge_account'), secure=True)
+        self.assertEqual(response.status_code, 200)
+
+
+@override_settings(
+    STORAGES={
+        'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
+        'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
+    }
+)
+class SupplierRegistrationWorkspaceGapFixTests(TestCase):
+    """SupplierRegistrationForm.save() previously created no capability or
+    workspace at all for a brand-new supplier -- confirms the fix."""
+
+    def test_supplier_registration_creates_client_and_supplier_workspaces(self):
+        from .forms import SupplierRegistrationForm
+        form = SupplierRegistrationForm(
+            data={
+                'first_name': 'Sup', 'last_name': 'Plier', 'email': 'supfix@example.com',
+                'mobile': '+679 000 0000', 'town': 'Suva', 'password': 'pass12345', 'password_confirm': 'pass12345',
+                'business_name': '', 'tin': '', 'bio': '',
+                'supply_categories': ['building-materials'], 'service_towns': ['Suva'],
+                'accepted_terms': 'on',
+            },
+            files={'tin_letter': SimpleUploadedFile('tin.pdf', b'%PDF-1.4', content_type='application/pdf')},
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        user = form.save()
+        self.assertIsNotNone(workspaces.get_client_workspace(user))
+        self.assertIsNotNone(workspaces.get_supplier_workspace(user))
+        self.assertTrue(UserCapability.objects.get(user=user).can_offer_services)
+
+
+class AccountMergeTests(TestCase):
+    def setUp(self):
+        self.user_a = User.objects.create_user(
+            email='merge-a@example.com', password='pass-a-12345',
+            first_name='A', last_name='User', role=User.ROLE_CLIENT, town='Suva', mobile='+679 111 1111',
+        )
+        workspaces.create_client_workspace(self.user_a)
+        self.user_b = User.objects.create_user(
+            email='merge-b@example.com', password='pass-b-12345',
+            first_name='B', last_name='User', role=User.ROLE_TRADIE, town='Nadi', mobile='+679 222 2222',
+        )
+        TradieProfile.objects.create(user=self.user_b, trades=['cleaning'], service_towns=['Nadi'])
+        workspaces.create_client_workspace(self.user_b)
+        workspaces.create_individual_provider_workspace(self.user_b)
+
+    def test_merge_form_happy_path_links_accounts(self):
+        from .forms import MergeAccountForm
+        form = MergeAccountForm(data={'email': self.user_b.email, 'password': 'pass-b-12345'}, user=self.user_a)
+        self.assertTrue(form.is_valid(), form.errors)
+        form.save()
+        linked = {u.pk for u in workspaces.get_linked_users(self.user_a)}
+        self.assertEqual(linked, {self.user_a.pk, self.user_b.pk})
+
+    def test_wrong_password_rejected(self):
+        from .forms import MergeAccountForm
+        form = MergeAccountForm(data={'email': self.user_b.email, 'password': 'wrong'}, user=self.user_a)
+        self.assertFalse(form.is_valid())
+
+    def test_self_merge_rejected(self):
+        from .forms import MergeAccountForm
+        form = MergeAccountForm(data={'email': self.user_a.email, 'password': 'pass-a-12345'}, user=self.user_a)
+        self.assertFalse(form.is_valid())
+
+    def test_soft_deleted_target_rejected(self):
+        from .forms import MergeAccountForm
+        self.user_b.account_deleted_at = django_timezone.now()
+        self.user_b.save(update_fields=['account_deleted_at'])
+        form = MergeAccountForm(data={'email': self.user_b.email, 'password': 'pass-b-12345'}, user=self.user_a)
+        self.assertFalse(form.is_valid())
+
+    def test_linked_account_transitive_closure_across_chain(self):
+        user_c = User.objects.create_user(
+            email='merge-c@example.com', password='pass-c-12345',
+            first_name='C', last_name='User', role=User.ROLE_CLIENT, town='Suva',
+        )
+        workspaces.create_client_workspace(user_c)
+        workspaces.link_accounts(self.user_a, self.user_b)
+        workspaces.link_accounts(self.user_b, user_c)
+        linked = {u.pk for u in workspaces.get_linked_users(self.user_a)}
+        self.assertEqual(linked, {self.user_a.pk, self.user_b.pk, user_c.pk})
+
+    def test_link_accounts_is_order_independent(self):
+        link1 = workspaces.link_accounts(self.user_a, self.user_b)
+        link2 = workspaces.link_accounts(self.user_b, self.user_a)
+        self.assertEqual(link1.pk, link2.pk)
+        self.assertEqual(LinkedAccount.objects.count(), 1)
+
+    def test_merge_view_requires_login(self):
+        response = self.client.get(reverse('merge_account'), secure=True)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(reverse('login'), response.url)
+
+    def test_merge_view_happy_path(self):
+        self.client.login(username=self.user_a.email, password='pass-a-12345')
+        response = self.client.post(
+            reverse('merge_account'), {'email': self.user_b.email, 'password': 'pass-b-12345'}, secure=True,
+        )
+        self.assertEqual(response.status_code, 302)
+        linked = {u.pk for u in workspaces.get_linked_users(self.user_a)}
+        self.assertEqual(linked, {self.user_a.pk, self.user_b.pk})
+
+    def test_merge_view_rate_limits_repeated_failed_attempts(self):
+        from django.core.cache import cache
+        cache.clear()
+        self.client.login(username=self.user_a.email, password='pass-a-12345')
+        for _ in range(10):
+            self.client.post(reverse('merge_account'), {'email': self.user_b.email, 'password': 'wrong'}, secure=True)
+        response = self.client.post(
+            reverse('merge_account'), {'email': self.user_b.email, 'password': 'pass-b-12345'}, secure=True,
+        )
+        # Blocked by the rate limit even though this attempt's credentials are correct.
+        linked = {u.pk for u in workspaces.get_linked_users(self.user_a)}
+        self.assertEqual(linked, {self.user_a.pk})
+
+
+class RoleTabLabelDisambiguationTests(TestCase):
+    """Every linked user gets their own client workspace, so two linked
+    accounts commonly produce two tabs that would otherwise both just say
+    'Client' with no way to tell them apart -- caught via a live browser
+    walkthrough, not the earlier unit tests (which never had two linked
+    users who both held the same role)."""
+
+    def setUp(self):
+        self.user_a = User.objects.create_user(
+            email='tabs-a@example.com', password='pass-a-12345',
+            first_name='Alpha', last_name='User', role=User.ROLE_CLIENT, town='Suva',
+        )
+        workspaces.create_client_workspace(self.user_a)
+        self.user_b = User.objects.create_user(
+            email='tabs-b@example.com', password='pass-b-12345',
+            first_name='Beta', last_name='User', role=User.ROLE_SUPPLIER, town='Nadi',
+        )
+        SupplierProfile.objects.create(user=self.user_b, supply_categories=['building-materials'], service_towns=['Nadi'])
+        workspaces.create_client_workspace(self.user_b)
+        workspaces.create_supplier_workspace(self.user_b)
+        workspaces.link_accounts(self.user_a, self.user_b)
+
+    def test_own_tabs_are_unlabeled_other_users_tabs_are_suffixed(self):
+        tabs = workspaces.get_role_tabs(self.user_a)
+        by_role_and_owner = {(t['user_id'], t['role']): t['label'] for t in tabs}
+        self.assertEqual(by_role_and_owner[(self.user_a.pk, User.ROLE_CLIENT)], 'Client')
+        self.assertEqual(by_role_and_owner[(self.user_b.pk, User.ROLE_CLIENT)], 'Client · Beta')
+        self.assertEqual(by_role_and_owner[(self.user_b.pk, User.ROLE_SUPPLIER)], 'Supplier · Beta')
+
+    def test_labels_are_no_longer_ambiguous(self):
+        tabs = workspaces.get_role_tabs(self.user_a)
+        labels = [t['label'] for t in tabs]
+        self.assertEqual(len(labels), len(set(labels)))
+
+
+class SwitchTabTests(TestCase):
+    def setUp(self):
+        self.user_a = User.objects.create_user(
+            email='switch-a@example.com', password='pass-a-12345',
+            first_name='A', last_name='User', role=User.ROLE_CLIENT, town='Suva',
+        )
+        workspaces.create_client_workspace(self.user_a)
+        self.user_b = User.objects.create_user(
+            email='switch-b@example.com', password='pass-b-12345',
+            first_name='B', last_name='User', role=User.ROLE_TRADIE, town='Nadi',
+        )
+        TradieProfile.objects.create(user=self.user_b, trades=['cleaning'], service_towns=['Nadi'])
+        workspaces.create_client_workspace(self.user_b)
+        workspaces.create_individual_provider_workspace(self.user_b)
+        workspaces.link_accounts(self.user_a, self.user_b)
+
+    def test_switch_tab_requires_login(self):
+        response = self.client.post(
+            reverse('switch_tab'), {'target_user_id': self.user_b.pk, 'target_role': 'tradie'}, secure=True,
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(reverse('login'), response.url)
+
+    def test_switch_tab_to_linked_account_logs_in_as_target(self):
+        self.client.login(username=self.user_a.email, password='pass-a-12345')
+        response = self.client.post(
+            reverse('switch_tab'), {'target_user_id': self.user_b.pk, 'target_role': User.ROLE_TRADIE}, secure=True,
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(self.client.session['_auth_user_id'], str(self.user_b.pk))
+        self.user_b.refresh_from_db()
+        self.assertEqual(self.user_b.role, User.ROLE_TRADIE)
+
+    def test_switch_tab_rejects_a_user_not_in_the_linked_set(self):
+        stranger = User.objects.create_user(
+            email='switch-stranger@example.com', password='pass-c-12345',
+            first_name='C', last_name='User', role=User.ROLE_CLIENT, town='Suva',
+        )
+        workspaces.create_client_workspace(stranger)
+        self.client.login(username=self.user_a.email, password='pass-a-12345')
+        response = self.client.post(
+            reverse('switch_tab'), {'target_user_id': stranger.pk, 'target_role': User.ROLE_CLIENT}, secure=True,
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_switch_tab_rejects_get(self):
+        self.client.login(username=self.user_a.email, password='pass-a-12345')
+        response = self.client.get(reverse('switch_tab'), secure=True)
+        self.assertEqual(response.status_code, 405)
+
+
+class DeletedAccountUnreachableViaLinkedTabsTests(TestCase):
+    """Deleting a linked account must actually be meaningful — a linked
+    partner's tab-switcher must never remain a side channel back into it.
+    Covers the fix in delete_account (removes the deleted user's
+    LinkedAccount rows) and get_linked_users (filters account_deleted_at as
+    a backstop for any stale rows)."""
+
+    def setUp(self):
+        self.user_a = User.objects.create_user(
+            email='delink-a@example.com', password='pass-a-12345',
+            first_name='A', last_name='User', role=User.ROLE_CLIENT, town='Suva',
+        )
+        workspaces.create_client_workspace(self.user_a)
+        self.user_b = User.objects.create_user(
+            email='delink-b@example.com', password='pass-b-12345',
+            first_name='B', last_name='User', role=User.ROLE_TRADIE, town='Nadi',
+        )
+        TradieProfile.objects.create(user=self.user_b, trades=['cleaning'], service_towns=['Nadi'])
+        workspaces.create_individual_provider_workspace(self.user_b)
+        workspaces.link_accounts(self.user_a, self.user_b)
+
+    def test_deleting_an_account_removes_it_from_the_partners_linked_set(self):
+        self.client.login(username=self.user_b.email, password='pass-b-12345')
+        self.client.post(reverse('delete_account'), {'password': 'pass-b-12345', 'confirm': 'on'}, secure=True)
+        linked = {u.pk for u in workspaces.get_linked_users(self.user_a)}
+        self.assertEqual(linked, {self.user_a.pk})
+        self.assertFalse(LinkedAccount.objects.exists())
+
+    def test_switch_tab_to_a_deleted_account_is_rejected(self):
+        self.client.login(username=self.user_b.email, password='pass-b-12345')
+        self.client.post(reverse('delete_account'), {'password': 'pass-b-12345', 'confirm': 'on'}, secure=True)
+        self.client.login(username=self.user_a.email, password='pass-a-12345')
+        response = self.client.post(
+            reverse('switch_tab'), {'target_user_id': self.user_b.pk, 'target_role': User.ROLE_TRADIE}, secure=True,
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_get_linked_users_filters_a_stale_row_even_without_cleanup(self):
+        # Simulate a LinkedAccount row that somehow survived deletion
+        # (e.g. pre-existing data from before this fix) to confirm the
+        # get_linked_users() filter is a real backstop, not just reachable
+        # via delete_account's own cleanup.
+        self.user_b.account_deleted_at = django_timezone.now()
+        self.user_b.save(update_fields=['account_deleted_at'])
+        linked = {u.pk for u in workspaces.get_linked_users(self.user_a)}
+        self.assertEqual(linked, {self.user_a.pk})
+
+
+class ClearLinkedLoginTests(TestCase):
+    def setUp(self):
+        self.user_a = User.objects.create_user(
+            email='clear-a@example.com', password='pass-a-12345',
+            first_name='A', last_name='User', role=User.ROLE_CLIENT, town='Suva',
+        )
+        workspaces.create_client_workspace(self.user_a)
+        self.user_b = User.objects.create_user(
+            email='clear-b@example.com', password='pass-b-12345',
+            first_name='B', last_name='User', role=User.ROLE_TRADIE, town='Nadi',
+        )
+        TradieProfile.objects.create(user=self.user_b, trades=['cleaning'], service_towns=['Nadi'])
+        workspaces.create_individual_provider_workspace(self.user_b)
+        workspaces.link_accounts(self.user_a, self.user_b)
+
+    def test_manage_linked_logins_renders_with_a_clearable_login(self):
+        self.client.login(username=self.user_a.email, password='pass-a-12345')
+        response = self.client.get(reverse('manage_linked_logins'), secure=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, self.user_a.email)
+        self.assertContains(response, self.user_b.email)
+        self.assertContains(response, 'Clear this login')
+
+    def test_clear_login_disables_target_password(self):
+        self.client.login(username=self.user_a.email, password='pass-a-12345')
+        response = self.client.post(
+            reverse('clear_linked_login', args=[self.user_b.pk]), {'password': 'pass-a-12345'}, secure=True,
+        )
+        self.assertEqual(response.status_code, 302)
+        self.user_b.refresh_from_db()
+        self.assertFalse(self.user_b.has_usable_password())
+
+    def test_clear_login_requires_requesting_users_own_password(self):
+        self.client.login(username=self.user_a.email, password='pass-a-12345')
+        self.client.post(
+            reverse('clear_linked_login', args=[self.user_b.pk]), {'password': 'wrong'}, secure=True,
+        )
+        self.user_b.refresh_from_db()
+        self.assertTrue(self.user_b.has_usable_password())
+
+    def test_clear_login_blocks_removing_the_last_usable_login(self):
+        self.user_b.set_unusable_password()
+        self.user_b.save(update_fields=['password'])
+        self.client.login(username=self.user_a.email, password='pass-a-12345')
+        response = self.client.post(
+            reverse('clear_linked_login', args=[self.user_a.pk]), {'password': 'pass-a-12345'}, secure=True,
+        )
+        self.assertEqual(response.status_code, 302)
+        self.user_a.refresh_from_db()
+        self.assertTrue(self.user_a.has_usable_password())
+
+    def test_clear_login_rejects_a_user_not_in_the_linked_set(self):
+        stranger = User.objects.create_user(
+            email='clear-stranger@example.com', password='pass-c-12345',
+            first_name='C', last_name='User', role=User.ROLE_CLIENT, town='Suva',
+        )
+        self.client.login(username=self.user_a.email, password='pass-a-12345')
+        response = self.client.post(
+            reverse('clear_linked_login', args=[stranger.pk]), {'password': 'pass-a-12345'}, secure=True,
+        )
+        self.assertEqual(response.status_code, 403)
