@@ -3822,17 +3822,34 @@ class RoleTabLabelDisambiguationTests(TestCase):
         workspaces.create_supplier_workspace(self.user_b)
         workspaces.link_accounts(self.user_a, self.user_b)
 
-    def test_own_tabs_are_unlabeled_other_users_tabs_are_suffixed(self):
+    def test_every_tab_is_suffixed_once_more_than_one_account_is_linked(self):
         tabs = workspaces.get_role_tabs(self.user_a)
         by_role_and_owner = {(t['user_id'], t['role']): t['label'] for t in tabs}
-        self.assertEqual(by_role_and_owner[(self.user_a.pk, User.ROLE_CLIENT)], 'Client')
+        self.assertEqual(by_role_and_owner[(self.user_a.pk, User.ROLE_CLIENT)], 'Client · Alpha')
         self.assertEqual(by_role_and_owner[(self.user_b.pk, User.ROLE_CLIENT)], 'Client · Beta')
         self.assertEqual(by_role_and_owner[(self.user_b.pk, User.ROLE_SUPPLIER)], 'Supplier · Beta')
+
+    def test_solo_account_tabs_stay_unlabeled(self):
+        solo_user = User.objects.create_user(
+            email='tabs-solo@example.com', password='p',
+            first_name='Solo', last_name='User', role=User.ROLE_CLIENT, town='Suva',
+        )
+        workspaces.create_client_workspace(solo_user)
+        tabs = workspaces.get_role_tabs(solo_user)
+        self.assertEqual([t['label'] for t in tabs], ['Client'])
 
     def test_labels_are_no_longer_ambiguous(self):
         tabs = workspaces.get_role_tabs(self.user_a)
         labels = [t['label'] for t in tabs]
         self.assertEqual(len(labels), len(set(labels)))
+
+    def test_business_name_takes_precedence_over_first_name(self):
+        self.user_b.supplier_profile.business_name = 'Beta Supplies Ltd'
+        self.user_b.supplier_profile.save(update_fields=['business_name'])
+        tabs = workspaces.get_role_tabs(self.user_a)
+        by_role_and_owner = {(t['user_id'], t['role']): t['label'] for t in tabs}
+        self.assertEqual(by_role_and_owner[(self.user_b.pk, User.ROLE_CLIENT)], 'Client · Beta Supplies Ltd')
+        self.assertEqual(by_role_and_owner[(self.user_b.pk, User.ROLE_SUPPLIER)], 'Supplier · Beta Supplies Ltd')
 
 
 class SwitchTabTests(TestCase):
