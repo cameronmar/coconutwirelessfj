@@ -3234,6 +3234,12 @@ class ActiveWorkspaceTests(TestCase):
         self.assertEqual(request.session[workspaces.SESSION_KEY], solo_ws.id)
 
 
+@override_settings(
+    STORAGES={
+        'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
+        'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
+    }
+)
 class WorkspaceWiringIntegrationTests(TestCase):
     """Confirms the real write paths (registration forms, post_task,
     submit_quote, accept_quote, complete_task, rate_tradie, rate_client)
