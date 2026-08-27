@@ -91,6 +91,31 @@ main{display:flex;align-items:center;justify-content:center;padding:36px 20px;mi
           </div>
         </div>
         <div class="field">
+          <label>Date of birth</label>
+          {{ form.date_of_birth }}
+          <div class="hint" style="font-size:.8rem;color:var(--muted);margin-top:4px;">{{ form.date_of_birth.help_text }}</div>
+          {% for e in form.date_of_birth.errors %}<div class="field-error">{{ e }}</div>{% endfor %}
+        </div>
+        <div id="guardianBlock" style="display:none;background:var(--blue-light);border-radius:10px;padding:14px 16px;margin-bottom:16px;">
+          <p style="margin:0 0 10px;font-size:.87rem;color:var(--text);font-weight:600;">Parent or guardian consent</p>
+          <p style="margin:0 0 12px;font-size:.85rem;color:var(--muted);">Because you're under 18, a parent or guardian must consent to you using the Coconut Wireless Network. Enter their details below — we may contact them to confirm.</p>
+          <div class="field">
+            <label>Parent/guardian full name</label>
+            {{ form.guardian_name }}
+            {% for e in form.guardian_name.errors %}<div class="field-error">{{ e }}</div>{% endfor %}
+          </div>
+          <div class="field">
+            <label>Parent/guardian phone or email</label>
+            {{ form.guardian_contact }}
+            {% for e in form.guardian_contact.errors %}<div class="field-error">{{ e }}</div>{% endfor %}
+          </div>
+          <div class="check-row" style="margin-bottom:0;">
+            {{ form.guardian_consent }}
+            <span>{{ form.guardian_consent.label }}</span>
+          </div>
+          {% for e in form.guardian_consent.errors %}<div class="field-error">{{ e }}</div>{% endfor %}
+        </div>
+        <div class="field">
           <label>Password</label>
           <div class="pw-wrap">
             {{ form.password }}
@@ -121,6 +146,26 @@ main{display:flex;align-items:center;justify-content:center;padding:36px 20px;mi
 </main>
 
 <script>
+(function () {
+  var dobInput = document.getElementById('id_date_of_birth');
+  var guardianBlock = document.getElementById('guardianBlock');
+  if (!dobInput || !guardianBlock) return;
+  function updateGuardianVisibility() {
+    if (!dobInput.value) { guardianBlock.style.display = 'none'; return; }
+    var dob = new Date(dobInput.value);
+    if (isNaN(dob.getTime())) { guardianBlock.style.display = 'none'; return; }
+    var today = new Date();
+    var age = today.getFullYear() - dob.getFullYear();
+    if (today.getMonth() < dob.getMonth() || (today.getMonth() === dob.getMonth() && today.getDate() < dob.getDate())) age--;
+    guardianBlock.style.display = (age >= 16 && age < 18) ? 'block' : 'none';
+  }
+  dobInput.addEventListener('change', updateGuardianVisibility);
+  {% if form.guardian_name.errors or form.guardian_contact.errors or form.guardian_consent.errors %}
+  guardianBlock.style.display = 'block';
+  {% else %}
+  updateGuardianVisibility();
+  {% endif %}
+})();
 document.querySelectorAll('.pw-toggle').forEach(function (btn) {
   btn.addEventListener('click', function () {
     var input = document.getElementById(btn.dataset.target);

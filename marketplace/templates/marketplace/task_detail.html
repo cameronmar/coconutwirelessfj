@@ -341,6 +341,12 @@
               <label>Message to the client</label>
               {{ quote_form.message }}
             </div>
+            {% if task.client.is_minor %}
+            <div class="field" style="display:flex;align-items:flex-start;gap:8px;font-size:.85rem;color:var(--muted);">
+              <input type="checkbox" name="acknowledged_minor_client" id="id_acknowledged_minor_client" required style="margin-top:3px;">
+              <label for="id_acknowledged_minor_client" style="font-weight:400;">I understand this client is under 18 and confirm the quoted work is lawful and appropriate to provide to a minor.</label>
+            </div>
+            {% endif %}
             <button type="submit" class="btn btn-primary" style="width:100%;">Send quote</button>
           </form>
         </div>
@@ -412,6 +418,11 @@
             <div style="font-size:.8rem;color:var(--muted);">Member since {{ task.client.date_joined|date:"Y" }}</div>
           </div>
         </div>
+        {% if task.client.is_minor %}
+        <div class="badge" style="background:#fff8e6;color:#7a5200;border:1px solid #f5a623;border-radius:8px;padding:6px 10px;font-size:.78rem;margin:8px 0;" title="This client is 16-17 and uses the platform with parent/guardian consent. Ensure the work you quote is appropriate and lawful to provide to a person under 18.">
+          🛡️ Client is under 18
+        </div>
+        {% endif %}
         {% if can_message_client %}
           <a href="{% url 'conversation' task.pk task.client.pk %}" class="btn btn-outline-blue btn-sm" style="width:100%;text-align:center;">Message client</a>
         {% endif %}

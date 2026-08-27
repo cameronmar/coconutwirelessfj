@@ -29,7 +29,6 @@
         {% if user.role == 'client' or user.role == 'tradie' %}
           <a href="{% url 'post_task' %}">Post a Job</a>
         {% endif %}
-        <a href="{% url 'inbox' %}">Messages</a>
         <a href="{% url 'dashboard' %}">Dashboard</a>
         {% if user.role == 'supplier' and suppliers_visible %}
           <a href="{% url 'supplier_dashboard' %}">Supplier Dashboard</a>
@@ -47,6 +46,27 @@
         {% endif %}
       {% endif %}
     </nav>
+    {% if user.is_authenticated %}
+    <div class="hdr-icons">
+      <a href="{% url 'notices' %}" class="hdr-icon-link" aria-label="Notices">🔔</a>
+      <a href="{% url 'inbox' %}" class="hdr-icon-link" aria-label="Messages">
+        💬
+        {% if unread_messages_count %}<span class="hdr-badge">{{ unread_messages_count }}</span>{% endif %}
+      </a>
+      <div class="account-menu">
+        <button type="button" class="account-toggle" id="accountToggle" aria-haspopup="true" aria-expanded="false" aria-controls="accountMenu">Account ▾</button>
+        <div class="account-dropdown" id="accountMenu">
+          <a href="{% url 'how_it_works' %}">How It Works</a>
+          <a href="{% url 'contact_support' %}">Contact Us</a>
+          <a href="{% url 'change_password' %}">Change password</a>
+          <a href="{% url 'blocked_users' %}">Blocked users</a>
+          <a href="{% url 'account_linking_hub' %}">Add or merge another account</a>
+          <a href="{% url 'manage_linked_logins' %}">Manage linked logins</a>
+          <a href="{% url 'delete_account' %}">Delete account</a>
+        </div>
+      </div>
+    </div>
+    {% endif %}
   </div>
 </header>
 <script>
@@ -57,6 +77,29 @@
   toggle.addEventListener('click', function(){
     var open = nav.classList.toggle('nav-open');
     toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+  });
+})();
+(function(){
+  var toggle = document.getElementById('accountToggle');
+  var menu = document.getElementById('accountMenu');
+  if (!toggle || !menu) return;
+  function closeMenu(){
+    menu.classList.remove('open');
+    toggle.setAttribute('aria-expanded', 'false');
+  }
+  function openMenu(){
+    menu.classList.add('open');
+    toggle.setAttribute('aria-expanded', 'true');
+  }
+  toggle.addEventListener('click', function(e){
+    e.stopPropagation();
+    if (menu.classList.contains('open')) { closeMenu(); } else { openMenu(); }
+  });
+  document.addEventListener('click', function(e){
+    if (!menu.contains(e.target) && e.target !== toggle) closeMenu();
+  });
+  document.addEventListener('keydown', function(e){
+    if (e.key === 'Escape') closeMenu();
   });
 })();
 </script>
@@ -72,7 +115,7 @@
 {% block content %}{% endblock %}
 
 <footer>
-  <p>&copy; 2026 The Coconut Wireless Network &nbsp;|&nbsp; <a href="{% url 'privacy' %}">Privacy</a> &nbsp;|&nbsp; <a href="{% url 'terms' %}">Terms</a> &nbsp;|&nbsp; <a href="{% url 'contact_support' %}">Contact</a></p>
+  <p>&copy; 2026 The Coconut Wireless Network &nbsp;|&nbsp; <a href="{% url 'privacy' %}">Privacy</a> &nbsp;|&nbsp; <a href="{% url 'terms' %}">Terms</a> &nbsp;|&nbsp; <a href="{% url 'child_safety' %}">Child Safety</a> &nbsp;|&nbsp; <a href="{% url 'contact_support' %}">Contact</a></p>
 </footer>
 
 {% block scripts %}{% endblock %}

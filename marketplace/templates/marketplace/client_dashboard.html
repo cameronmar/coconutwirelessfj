@@ -52,16 +52,6 @@ footer{display:none;}/* hide footer inside dashboard layout */
     <a href="{% url 'client_dashboard' %}" class="sb-link active"><span class="icon">📋</span>All tasks</a>
     <a href="{% url 'browse_tasks' %}" class="sb-link"><span class="icon">🔍</span>Browse tasks</a>
     <a href="{% url 'post_task' %}" class="sb-link"><span class="icon">➕</span>Post a task</a>
-    <div class="sb-lbl" style="margin-top:10px;">Account</div>
-    <a href="{% url 'inbox' %}" class="sb-link"><span class="icon">💬</span>Messages</a>
-    <a href="{% url 'notices' %}" class="sb-link"><span class="icon">🔔</span>Notices</a>
-    <a href="{% url 'how_it_works' %}" class="sb-link"><span class="icon">ℹ️</span>How It Works</a>
-    <a href="{% url 'contact_support' %}" class="sb-link"><span class="icon">✉️</span>Contact Us</a>
-    <a href="{% url 'change_password' %}" class="sb-link"><span class="icon">🔑</span>Change password</a>
-    <a href="{% url 'blocked_users' %}" class="sb-link"><span class="icon">🚫</span>Blocked users</a>
-    <a href="{% url 'account_linking_hub' %}" class="sb-link"><span class="icon">🔗</span>Add or merge another account</a>
-    <a href="{% url 'delete_account' %}" class="sb-link"><span class="icon">⚠️</span>Delete account</a>
-    <a href="{% url 'logout' %}" class="sb-link"><span class="icon">🚪</span>Log out</a>
     {% if sponsors %}
     <div style="padding:14px 16px;">
       {% include "marketplace/_sponsor_carousel.html" %}

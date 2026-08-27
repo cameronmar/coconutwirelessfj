@@ -1,4 +1,5 @@
 import os
+from decimal import Decimal
 from pathlib import Path
 from django.core.exceptions import ImproperlyConfigured
 import dj_database_url
@@ -109,6 +110,8 @@ TEMPLATES = [
                 'django.contrib.messages.context_processors.messages',
                 'django.template.context_processors.media',
                 'marketplace.context_processors.beta_features',
+                'marketplace.context_processors.minor_session',
+                'marketplace.context_processors.header_counts',
             ],
         },
     },
@@ -248,6 +251,10 @@ if IS_PRODUCTION:
 # crashing the whole app on startup.
 ADMIN_EMAIL = os.environ.get('ADMIN_EMAIL', '').strip()
 
+# Designated child safety contact (Terms §13.7 / Child Safety Standard) —
+# urgent child-safety reports route here instead of ADMIN_EMAIL.
+CHILD_SAFETY_CONTACT_EMAIL = os.environ.get('CHILD_SAFETY_CONTACT_EMAIL', 'coconutwirelessfj@futurefoundries.com').strip()
+
 # ── Firebase / FCM (optional) ─────────────────────────────────────────────────
 # Set FIREBASE_CREDENTIALS_JSON to the full JSON text of your Firebase service
 # account key (downloaded from Firebase console → Project settings → Service
@@ -262,6 +269,13 @@ FIREBASE_CREDENTIALS_JSON = os.environ.get('FIREBASE_CREDENTIALS_JSON', '').stri
 # preview a gated feature regardless of this flag (see
 # marketplace.views._beta_feature and User.can_preview_unlaunched_features()).
 SUPPLIERS_ENABLED = _get_bool_env('SUPPLIERS_ENABLED', True)
+
+# ── 16-17 audience support (Terms §2, Privacy §9) ──────────────────────────
+# Caps the budget a Minor User (16-17) can post a task for, to keep their
+# engagements in "day-to-day services" territory rather than large contracts.
+# [COUNSEL: confirm this figure, or whether the cap is needed at all, per the
+# necessaries/voidability analysis — see terms.html §2.]
+MINOR_TASK_BUDGET_CAP_FJD = Decimal(os.environ.get('MINOR_TASK_BUDGET_CAP_FJD', '500.00'))
 
 # ── Observability (optional) ──────────────────────────────────────────────────
 SENTRY_DSN = os.environ.get('SENTRY_DSN', '').strip()

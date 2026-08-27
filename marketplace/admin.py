@@ -32,6 +32,7 @@ from .models import (
     Quote,
     QuotingAppointment,
     QuotingAppointmentSlot,
+    ServiceSearch,
     Sponsor,
     SupplyCategory,
     SupplierProfile,
@@ -687,6 +688,41 @@ class TradeCategoryAdmin(admin.ModelAdmin):
     list_display = ['name', 'slug', 'icon', 'parent', 'active']
     prepopulated_fields = {'slug': ('name',)}
     search_fields = ['name', 'slug']
+
+
+# ── Service search analytics ──────────────────────────────────────────────────
+
+class HasResultsFilter(admin.SimpleListFilter):
+    """One-click filter to surface unmet demand — searches that returned no
+    providers are exactly the recruitment-targeting signal this log exists
+    for (see ServiceSearch docstring)."""
+    title = 'results'
+    parameter_name = 'has_results'
+
+    def lookups(self, request, model_admin):
+        return (('0', 'Zero results'), ('1', 'Has results'))
+
+    def queryset(self, request, queryset):
+        if self.value() == '0':
+            return queryset.filter(result_count=0)
+        if self.value() == '1':
+            return queryset.filter(result_count__gt=0)
+        return queryset
+
+
+@admin.register(ServiceSearch)
+class ServiceSearchAdmin(admin.ModelAdmin):
+    list_display = ['created_at', 'query_text', 'matched_trade', 'town', 'result_count', 'user']
+    list_filter = ['matched_trade', 'town', 'created_at', HasResultsFilter]
+    search_fields = ['query_text']
+    date_hierarchy = 'created_at'
+    raw_id_fields = ['user']
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
 
 
 # ── Task Photo ────────────────────────────────────────────────────────────────
@@ -1377,17 +1413,31 @@ class SupplierMessageAdmin(admin.ModelAdmin):
 
 @admin.register(ContentReport)
 class ContentReportAdmin(admin.ModelAdmin):
-    list_display = ('reported_user', 'reason', 'report_type', 'status', 'reporter', 'created_at')
+    list_display = ('safety_flag', 'reported_user', 'reason', 'report_type', 'status', 'reporter', 'created_at')
     list_filter = ('status', 'reason', 'report_type', 'created_at')
     search_fields = ('reporter__email', 'reported_user__email', 'details')
     raw_id_fields = ('reporter', 'reported_user', 'task', 'reviewed_by')
-    readonly_fields = ('reporter', 'reported_user', 'report_type', 'task', 'reference_note', 'reason', 'details', 'created_at')
+    readonly_fields = ('reporter', 'reported_user', 'report_type', 'task', 'reference_note', 'reason', 'details', 'created_at', 'escalated_at')
     actions = ['mark_actioned', 'mark_dismissed']
 
     fieldsets = (
-        ('Report', {'fields': ('reporter', 'reported_user', 'report_type', 'task', 'reference_note', 'reason', 'details', 'created_at')}),
+        ('Report', {'fields': ('reporter', 'reported_user', 'report_type', 'task', 'reference_note', 'reason', 'details', 'created_at', 'escalated_at')}),
         ('Review', {'fields': ('status', 'reviewed_by', 'reviewed_at', 'resolution_note')}),
     )
+
+    def get_queryset(self, request):
+        """Child safety reports are prioritised ahead of every other report
+        type (Terms §13.7 / Child Safety Standard) — surface them first in
+        the queue regardless of the default '-created_at' ordering. Postgres
+        treats NULL as the largest value for DESC ordering by default (the
+        opposite of what we want here), so nulls_last is explicit rather
+        than relying on the backend's default."""
+        from django.db.models import F
+        return super().get_queryset(request).order_by(F('escalated_at').desc(nulls_last=True), 'status', '-created_at')
+
+    @admin.display(description='', boolean=True)
+    def safety_flag(self, obj):
+        return obj.is_child_safety
 
     @admin.action(description='Mark selected reports as actioned')
     def mark_actioned(self, request, queryset):

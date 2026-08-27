@@ -41,7 +41,7 @@
   <div class="hero-inner">
     <div class="hero-image" style="background-image:url('{% static 'marketplace/images/01_connecting_fiji_building_together.png' %}')" role="img" aria-label="Connecting Fiji, Building Together — the Coconut Wireless Network connects locals with trusted local professionals to get the job done, the Fijian way"></div>
     <div class="search-card">
-      <form action="{% url 'browse_tasks' %}" method="get">
+      <form action="{% url 'browse_tradies' %}" method="get">
         <label for="homeSearchQ" class="sr-only">What service do you need?</label>
         <input type="text" name="q" id="homeSearchQ" placeholder="What service do you need?">
         <label for="homeSearchTown" class="sr-only">Town</label>
@@ -68,19 +68,19 @@
     <section class="section">
       <h2 class="section-title">Popular services</h2>
       <div class="grid-4">
-        <a href="{% url 'browse_tasks' %}?category=plumbing" class="svc-card"><div class="svc-icon">🔧</div><h3>Plumbing</h3><p>Leak repairs, taps, hot water systems and bathroom work.</p></a>
-        <a href="{% url 'browse_tasks' %}?category=electrical" class="svc-card"><div class="svc-icon">⚡</div><h3>Electrical</h3><p>Wiring, lighting, switchboard upgrades and inspections.</p></a>
-        <a href="{% url 'browse_tasks' %}?category=cleaning" class="svc-card"><div class="svc-icon">🧹</div><h3>Cleaning</h3><p>Home, office and end-of-lease cleaning across Fiji.</p></a>
-        <a href="{% url 'browse_tasks' %}?category=gardening" class="svc-card"><div class="svc-icon">🌿</div><h3>Gardening</h3><p>Lawn mowing, landscaping and outdoor maintenance.</p></a>
-        <a href="{% url 'browse_tasks' %}?category=carpentry" class="svc-card"><div class="svc-icon">🪚</div><h3>Carpentry</h3><p>Shelving, decking, furniture assembly and repairs.</p></a>
-        <a href="{% url 'browse_tasks' %}?category=painting" class="svc-card"><div class="svc-icon">🎨</div><h3>Painting</h3><p>Interior and exterior painting and surface prep.</p></a>
-        <a href="{% url 'browse_tasks' %}?category=aircon" class="svc-card"><div class="svc-icon">❄️</div><h3>Air Conditioning</h3><p>Install, service and repair split systems.</p></a>
-        <a href="{% url 'browse_tasks' %}?category=removalist" class="svc-card"><div class="svc-icon">🚛</div><h3>Removalists</h3><p>Local and inter-island moving services, big or small.</p></a>
-        <a href="{% url 'browse_tasks' %}?category=baker" class="svc-card"><div class="svc-icon">🎂</div><h3>Baking</h3><p>Custom cakes, cupcakes and baked goods for any occasion.</p></a>
-        <a href="{% url 'browse_tasks' %}?category=photographer" class="svc-card"><div class="svc-icon">📸</div><h3>Photographer</h3><p>Events, portraits and professional photography services.</p></a>
-        <a href="{% url 'browse_tasks' %}?category=nanny" class="svc-card"><div class="svc-icon">👶</div><h3>Nanny</h3><p>Trusted childcare and babysitting across Fiji.</p></a>
-        <a href="{% url 'browse_tasks' %}?category=tutor" class="svc-card"><div class="svc-icon">📚</div><h3>Tutor</h3><p>Private tuition and exam prep for all ages and subjects.</p></a>
-        <a href="{% url 'browse_tasks' %}?category=swim_coach" class="svc-card"><div class="svc-icon">🏊</div><h3>Swim Coach</h3><p>Swimming lessons and coaching for kids and adults.</p></a>
+        <a href="{% url 'browse_tradies' %}?category=plumbing" class="svc-card"><div class="svc-icon">🔧</div><h3>Plumbing</h3><p>Leak repairs, taps, hot water systems and bathroom work.</p></a>
+        <a href="{% url 'browse_tradies' %}?category=electrical" class="svc-card"><div class="svc-icon">⚡</div><h3>Electrical</h3><p>Wiring, lighting, switchboard upgrades and inspections.</p></a>
+        <a href="{% url 'browse_tradies' %}?category=cleaning" class="svc-card"><div class="svc-icon">🧹</div><h3>Cleaning</h3><p>Home, office and end-of-lease cleaning across Fiji.</p></a>
+        <a href="{% url 'browse_tradies' %}?category=gardening" class="svc-card"><div class="svc-icon">🌿</div><h3>Gardening</h3><p>Lawn mowing, landscaping and outdoor maintenance.</p></a>
+        <a href="{% url 'browse_tradies' %}?category=carpentry" class="svc-card"><div class="svc-icon">🪚</div><h3>Carpentry</h3><p>Shelving, decking, furniture assembly and repairs.</p></a>
+        <a href="{% url 'browse_tradies' %}?category=painting" class="svc-card"><div class="svc-icon">🎨</div><h3>Painting</h3><p>Interior and exterior painting and surface prep.</p></a>
+        <a href="{% url 'browse_tradies' %}?category=aircon" class="svc-card"><div class="svc-icon">❄️</div><h3>Air Conditioning</h3><p>Install, service and repair split systems.</p></a>
+        <a href="{% url 'browse_tradies' %}?category=removalist" class="svc-card"><div class="svc-icon">🚛</div><h3>Removalists</h3><p>Local and inter-island moving services, big or small.</p></a>
+        <a href="{% url 'browse_tradies' %}?category=baker" class="svc-card"><div class="svc-icon">🎂</div><h3>Baking</h3><p>Custom cakes, cupcakes and baked goods for any occasion.</p></a>
+        <a href="{% url 'browse_tradies' %}?category=photographer" class="svc-card"><div class="svc-icon">📸</div><h3>Photographer</h3><p>Events, portraits and professional photography services.</p></a>
+        <a href="{% url 'browse_tradies' %}?category=nanny" class="svc-card"><div class="svc-icon">👶</div><h3>Nanny</h3><p>Trusted childcare and babysitting across Fiji.</p></a>
+        <a href="{% url 'browse_tradies' %}?category=tutor" class="svc-card"><div class="svc-icon">📚</div><h3>Tutor</h3><p>Private tuition and exam prep for all ages and subjects.</p></a>
+        <a href="{% url 'browse_tradies' %}?category=swim_coach" class="svc-card"><div class="svc-icon">🏊</div><h3>Swim Coach</h3><p>Swimming lessons and coaching for kids and adults.</p></a>
       </div>
     </section>
 

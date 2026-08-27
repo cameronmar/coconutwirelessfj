@@ -358,6 +358,21 @@ def get_linked_users(user):
     return list(seen.values())
 
 
+def _display_name_for_tabs(user):
+    """
+    Best human-readable identifier for a linked user's tabs: their business
+    name if they have one, since that's what the other tabs (Local Pro/
+    Supplier) actually trade under — falls back to their first name, since
+    both registration forms explicitly say business name is optional
+    ("leave blank if you work as an individual contractor").
+    """
+    if getattr(user, 'tradie_profile', None) and user.tradie_profile.business_name:
+        return user.tradie_profile.business_name
+    if getattr(user, 'supplier_profile', None) and user.supplier_profile.business_name:
+        return user.supplier_profile.business_name
+    return user.first_name
+
+
 def get_role_tabs(user):
     """
     One tab per (linked user, role they can act as) — the data a shared
@@ -369,19 +384,23 @@ def get_role_tabs(user):
     Every linked user gets their own client workspace (see
     create_client_workspace's callers), so two linked accounts commonly
     produce two tabs that would otherwise both just say "Client" with no
-    way to tell them apart. Any tab for a DIFFERENT user than the one
-    viewing gets that user's first name appended — the current user's own
-    tabs stay unlabeled since they're already visually distinct via
-    is_current's highlight.
+    way to tell them apart. Once more than one account is linked, EVERY
+    tab (including the current user's own) gets a _display_name_for_tabs
+    suffix — labeling only the "other" tabs was tried first and rejected:
+    a bare "Client" next to a suffixed "Client · Beta" still leaves someone
+    guessing whether the unlabeled one is really theirs. Solo accounts
+    (nothing linked) keep bare labels — nothing to disambiguate yet.
     """
     if not user or not user.is_authenticated:
         return []
+    linked_users = get_linked_users(user)
+    multi_account = len(linked_users) > 1
     tabs = []
-    for linked_user in get_linked_users(user):
+    for linked_user in linked_users:
         for role in get_own_available_roles(linked_user):
             label = _ROLE_LABELS.get(role, role)
-            if linked_user.pk != user.pk:
-                label = f'{label} · {linked_user.first_name}'.strip(' ·')
+            if multi_account:
+                label = f'{label} · {_display_name_for_tabs(linked_user)}'.strip(' ·')
             tabs.append({
                 'user_id': linked_user.pk,
                 'role': role,

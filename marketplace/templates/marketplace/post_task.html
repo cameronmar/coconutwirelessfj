@@ -7,15 +7,21 @@
 .post-grid{display:grid;grid-template-columns:1fr 320px;gap:22px;}
 .form-card{background:var(--white);border-radius:16px;box-shadow:0 4px 18px rgba(0,80,120,.08);padding:24px;margin-bottom:18px;}
 .form-card h2{font-size:1rem;color:var(--blue);margin:0 0 16px;padding-bottom:9px;border-bottom:1px solid var(--blue-light);}
-.cat-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(128px,1fr));gap:8px;}
-.cat-chip{display:flex;align-items:center;gap:7px;padding:9px 12px;border:1.5px solid #cce4ef;border-radius:10px;cursor:pointer;font-size:.84rem;font-family:inherit;background:var(--white);transition:all .2s;text-align:left;}
-.cat-chip:focus-visible{outline:2px solid var(--blue);outline-offset:2px;}
-.cat-chip:hover,.cat-chip.sel{border-color:var(--blue);background:var(--blue-light);color:var(--blue);font-weight:600;}
+.multi-cat-grid{display:grid;grid-template-columns:1fr;gap:8px;}
+@media(min-width:480px){.multi-cat-grid{grid-template-columns:1fr 1fr;}}
 .multi-cat-grid div{display:contents;}
 .multi-cat-grid label{display:flex;align-items:center;gap:7px;padding:9px 12px;border:1.5px solid #cce4ef;border-radius:10px;cursor:pointer;font-size:.84rem;background:var(--white);transition:all .2s;}
 .multi-cat-grid label:hover{border-color:var(--blue);}
 .multi-cat-grid label:has(input:checked){border-color:var(--blue);background:var(--blue-light);color:var(--blue);font-weight:600;}
 .multi-cat-grid input[type=checkbox]{accent-color:var(--blue);}
+.cat-multiselect{position:relative;}
+.cat-multiselect-toggle{display:flex;align-items:center;justify-content:space-between;width:100%;cursor:pointer;text-align:left;background:var(--white);font-family:inherit;}
+.cat-chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;}
+.cat-chip-tag{display:inline-flex;align-items:center;gap:2px;background:var(--blue-light);color:var(--blue);border-radius:16px;padding:5px 4px 5px 12px;font-size:.82rem;font-weight:600;}
+.cat-chip-remove{background:none;border:none;color:var(--blue);cursor:pointer;font-size:.85rem;padding:2px 8px;line-height:1;}
+.cat-chip-remove:hover{color:var(--blue-dark);}
+.cat-multiselect-panel{display:none;margin-top:8px;border:1.5px solid #cce4ef;border-radius:10px;padding:10px;max-height:260px;overflow-y:auto;}
+.cat-multiselect-panel.open{display:block;}
 .sidebar-card{background:var(--white);border-radius:16px;box-shadow:0 4px 18px rgba(0,80,120,.08);padding:20px;position:sticky;top:16px;}
 .sidebar-card h3{font-size:.94rem;color:var(--blue);margin:0 0 12px;}
 .tip{display:flex;gap:9px;margin-bottom:10px;font-size:.85rem;color:var(--muted);line-height:1.5;}
@@ -46,18 +52,26 @@
             <div class="hint">Be specific — it helps local professionals give accurate quotes.</div>
           </div>
           <div class="field">
-            <label id="catLabel">Category</label>
-            <div class="cat-grid" id="catGrid" role="radiogroup" aria-labelledby="catLabel">
+            <label for="id_category">Category</label>
+            <select name="category" id="id_category" class="form-input" required>
+              <option value="" {% if not form.category.value %}selected{% endif %}>Select a category…</option>
               {% for val, label in category_choices %}
-              <button type="button" class="cat-chip {% if form.category.value == val %}sel{% endif %}" role="radio" aria-checked="{% if form.category.value == val %}true{% else %}false{% endif %}" onclick="pickCat('{{ val }}',this)">{{ label }}</button>
+              <option value="{{ val }}" {% if form.category.value == val %}selected{% endif %}>{{ label }}</option>
               {% endfor %}
-            </div>
-            <input type="hidden" name="category" id="catInput" value="{{ form.category.value|default:'' }}">
+            </select>
             {% for e in form.category.errors %}<div class="field-error">{{e}}</div>{% endfor %}
           </div>
           <div class="field">
-            <label>{{ form.categories.label }}</label>
-            <div class="cat-grid multi-cat-grid">{{ form.categories }}</div>
+            <label id="categoriesLabel">{{ form.categories.label }}</label>
+            <div class="cat-multiselect">
+              <button type="button" class="form-input cat-multiselect-toggle" id="categoriesToggle" aria-haspopup="true" aria-expanded="false" aria-controls="categoriesPanel" aria-labelledby="categoriesLabel">
+                <span id="categoriesToggleLabel">➕ Add more categories ▾</span>
+              </button>
+              <div class="cat-chips" id="categoriesChips"></div>
+              <div class="cat-multiselect-panel" id="categoriesPanel">
+                <div class="multi-cat-grid">{{ form.categories }}</div>
+              </div>
+            </div>
             {% for e in form.categories.errors %}<div class="field-error">{{e}}</div>{% endfor %}
           </div>
           <div class="field">
@@ -166,15 +180,71 @@
 
 {% block scripts %}
 <script>
-function pickCat(val, el){
-  document.querySelectorAll('.cat-chip').forEach(function(c){
-    c.classList.remove('sel');
-    c.setAttribute('aria-checked', 'false');
+(function(){
+  var toggle = document.getElementById('categoriesToggle');
+  var toggleLabel = document.getElementById('categoriesToggleLabel');
+  var panel = document.getElementById('categoriesPanel');
+  var chipsWrap = document.getElementById('categoriesChips');
+  if (!toggle || !panel || !chipsWrap) return;
+
+  function checkboxes(){
+    return Array.prototype.slice.call(panel.querySelectorAll('input[type=checkbox]'));
+  }
+
+  function labelTextFor(cb){
+    var label = panel.querySelector('label[for="' + cb.id + '"]');
+    return label ? label.textContent.trim() : cb.value;
+  }
+
+  function renderChips(){
+    var checked = checkboxes().filter(function(cb){ return cb.checked; });
+    chipsWrap.innerHTML = '';
+    checked.forEach(function(cb){
+      var chip = document.createElement('span');
+      chip.className = 'cat-chip-tag';
+      chip.appendChild(document.createTextNode(labelTextFor(cb)));
+      var x = document.createElement('button');
+      x.type = 'button';
+      x.className = 'cat-chip-remove';
+      x.setAttribute('aria-label', 'Remove ' + labelTextFor(cb));
+      x.textContent = '✕';
+      x.addEventListener('click', function(){
+        cb.checked = false;
+        renderChips();
+      });
+      chip.appendChild(x);
+      chipsWrap.appendChild(chip);
+    });
+    toggleLabel.textContent = checked.length
+      ? (checked.length + ' more categories selected ▾')
+      : '➕ Add more categories ▾';
+  }
+
+  panel.addEventListener('change', function(e){
+    if (e.target && e.target.matches('input[type=checkbox]')) renderChips();
   });
-  el.classList.add('sel');
-  el.setAttribute('aria-checked', 'true');
-  document.getElementById('catInput').value=val;
-}
+
+  function openPanel(){
+    panel.classList.add('open');
+    toggle.setAttribute('aria-expanded', 'true');
+  }
+  function closePanel(){
+    panel.classList.remove('open');
+    toggle.setAttribute('aria-expanded', 'false');
+  }
+  toggle.addEventListener('click', function(e){
+    e.stopPropagation();
+    if (panel.classList.contains('open')) { closePanel(); } else { openPanel(); }
+  });
+  document.addEventListener('click', function(e){
+    if (!panel.contains(e.target) && e.target !== toggle && !toggle.contains(e.target)) closePanel();
+  });
+  document.addEventListener('keydown', function(e){
+    if (e.key === 'Escape') closePanel();
+  });
+
+  renderChips();
+})();
 
 function updateDateFields(){
   var checked = document.querySelector('input[name="date_type"]:checked');
