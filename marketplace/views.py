@@ -1511,9 +1511,10 @@ def add_role_supplier(request):
     form = AddSupplierRoleForm(request.POST or None, request.FILES or None, user=request.user)
     if request.method == 'POST' and form.is_valid():
         user = form.save()
+        settings_obj = PlatformSettings.get_active()
         TermsAcceptance.objects.create(
             user=user,
-            terms_version='1.0',
+            terms_version=settings_obj.terms_version if settings_obj else '1.0',
             ip_address=request.META.get('REMOTE_ADDR'),
             user_agent=request.META.get('HTTP_USER_AGENT', ''),
             accepted_platform_circumvention=False,
@@ -2105,9 +2106,10 @@ def register_supplier(request):
     supply_choices = SupplyCategory.get_choices()
     if request.method == 'POST' and form.is_valid():
         user = form.save(request=request)
+        settings_obj = PlatformSettings.get_active()
         TermsAcceptance.objects.create(
             user=user,
-            terms_version='1.0',
+            terms_version=settings_obj.terms_version if settings_obj else '1.0',
             ip_address=request.META.get('REMOTE_ADDR'),
             user_agent=request.META.get('HTTP_USER_AGENT', ''),
             accepted_platform_circumvention=False,

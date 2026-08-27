@@ -1118,7 +1118,7 @@ class PlatformSettings(models.Model):
         help_text='Fee percentage for large jobs over threshold'
     )
     terms_version = models.CharField(
-        max_length=20, default='1.0',
+        max_length=20, default='1.1',
         help_text='Active terms version presented to users at registration'
     )
     active        = models.BooleanField(default=True)
