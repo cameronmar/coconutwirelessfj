@@ -691,7 +691,11 @@ def browse_tasks(request):
     keyword  = request.GET.get('q', '').strip()
     town     = request.GET.get('town', '').strip()
     if category:
-        qs = qs.filter(category=category)
+        # A task can carry the filtered trade either as its primary category
+        # or in its additional categories (M2M) — match either, not just the
+        # primary, or a tradie filtering by a secondary trade wrongly sees
+        # nothing. distinct() because the M2M join can duplicate rows.
+        qs = qs.filter(Q(category=category) | Q(categories__slug=category)).distinct()
     if keyword:
         qs = qs.filter(Q(title__icontains=keyword) | Q(description__icontains=keyword))
     if town:
