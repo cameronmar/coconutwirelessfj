@@ -1,5 +1,5 @@
 import os
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 
 from django import forms
@@ -7,6 +7,7 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.files.base import ContentFile
 from django.db import transaction
+from django.utils import timezone
 
 from .constants import TOWN_CHOICES, EXPERIENCE_CHOICES, FOUNDING_MEMBER_SLOTS, FOUNDING_MEMBER_CREDIT
 from .models import User, TradieProfile, Task, Quote, Message, TradeCategory, TaskPhoto, MarketListing, MarketOrder, PlatformSettings, SupplyCategory, SupplierProfile, ContentReport
@@ -49,6 +50,20 @@ def _clean_verification_document(file):
     return file
 
 
+def _age_from_dob(dob):
+    today = date.today()
+    return today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
+
+
+def _clean_minimum_age_dob(dob, minimum_age, field_error_message):
+    """Shared DOB floor check for Provider/Supplier registration and
+    add-role forms, which require 18+ outright (see Decision 1 — minors
+    may register as Clients only)."""
+    if dob and _age_from_dob(dob) < minimum_age:
+        raise ValidationError(field_error_message)
+    return dob
+
+
 def _validate_closed_beta_email(email, gate_enabled):
     if not gate_enabled:
         return
@@ -71,12 +86,32 @@ class ClientRegistrationForm(forms.Form):
     email            = forms.EmailField(widget=_input('you@example.fj', type_='email'))
     mobile           = forms.CharField(max_length=20,  widget=_input('+679 123 4567'))
     town             = forms.ChoiceField(choices=[('', 'Select town…')] + list(TOWN_CHOICES), widget=_select())
+    # Neutral date-of-birth entry (Terms §2 / Privacy §9) — deliberately not
+    # an "Are you over 18? Yes/No" toggle, per Google Play's age-screen
+    # neutrality requirement. Age band is derived from this, never asked
+    # directly.
+    date_of_birth    = forms.DateField(
+        label='Date of birth',
+        widget=forms.DateInput(attrs={'class': 'form-input', 'type': 'date'}),
+        help_text='You must be at least 16 to use the Coconut Wireless Network.',
+    )
+    guardian_name    = forms.CharField(max_length=120, required=False, label='Parent/guardian full name', widget=_input('Required if you are under 18'))
+    guardian_contact = forms.CharField(max_length=120, required=False, label='Parent/guardian phone or email', widget=_input('Required if you are under 18'))
+    guardian_consent = forms.BooleanField(
+        required=False,
+        label='I confirm my parent or guardian consents to me using this platform and to the collection of my '
+              'information as described in the Privacy Policy.',
+    )
     password         = forms.CharField(widget=forms.PasswordInput(attrs={'class': 'form-input', 'placeholder': 'At least 8 characters'}))
     password_confirm = forms.CharField(label='Confirm password', widget=forms.PasswordInput(attrs={'class': 'form-input', 'placeholder': 'Repeat password'}))
     accepted_terms   = forms.BooleanField(
         required=True,
         error_messages={'required': 'You must accept the Terms & Conditions, Privacy Policy and Platform Rules to register.'}
     )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields['date_of_birth'].widget.attrs['max'] = date.today().isoformat()
 
     def clean_email(self):
         email = self.cleaned_data['email'].lower()
@@ -90,10 +125,30 @@ class ClientRegistrationForm(forms.Form):
         p1, p2 = cd.get('password'), cd.get('password_confirm')
         if p1 and p2 and p1 != p2:
             raise ValidationError('Passwords do not match.')
+
+        dob = cd.get('date_of_birth')
+        if dob:
+            age = _age_from_dob(dob)
+            if age < User.MINOR_AGE_FLOOR:
+                # Plain rejection message, no coaching toward a passing DOB —
+                # required for Google Play age-screen neutrality. The view
+                # additionally holds this rejection in session (see
+                # register_client) so the same session can't just retry with
+                # a different DOB.
+                self.under_age_rejected = True
+                raise ValidationError('You must be at least 16 years old to create an account. If you entered your date of birth incorrectly, contact us via the Support page.')
+            if age < User.AGE_OF_MAJORITY:
+                if not cd.get('guardian_consent'):
+                    self.add_error('guardian_consent', 'Parent or guardian consent is required for users under 18.')
+                if not (cd.get('guardian_name') or '').strip():
+                    self.add_error('guardian_name', 'Required for users under 18.')
+                if not (cd.get('guardian_contact') or '').strip():
+                    self.add_error('guardian_contact', 'Required for users under 18.')
         return cd
 
-    def save(self):
+    def save(self, request=None):
         cd = self.cleaned_data
+        is_minor = _age_from_dob(cd['date_of_birth']) < User.AGE_OF_MAJORITY
         with transaction.atomic():
             user = User.objects.create_user(
                 email=cd['email'],
@@ -103,7 +158,16 @@ class ClientRegistrationForm(forms.Form):
                 mobile=cd['mobile'],
                 town=cd['town'],
                 role=User.ROLE_CLIENT,
+                date_of_birth=cd['date_of_birth'],
             )
+            if is_minor:
+                user.guardian_name = cd.get('guardian_name', '').strip()
+                user.guardian_contact = cd.get('guardian_contact', '').strip()
+                user.guardian_consent_at = timezone.now()
+                user.guardian_consent_ip = request.META.get('REMOTE_ADDR') if request else None
+                user.save(update_fields=[
+                    'guardian_name', 'guardian_contact', 'guardian_consent_at', 'guardian_consent_ip',
+                ])
             workspaces.ensure_user_capability(user)
             workspaces.create_client_workspace(user)
         return user
@@ -115,6 +179,11 @@ class TradieRegistrationForm(forms.Form):
     email            = forms.EmailField(widget=_input('you@example.fj', type_='email'))
     mobile           = forms.CharField(max_length=20,  widget=_input('+679 XXX XXXX'))
     town             = forms.ChoiceField(choices=[('', 'Select town / service area…')] + list(TOWN_CHOICES), widget=_select())
+    date_of_birth    = forms.DateField(
+        label='Date of birth',
+        widget=forms.DateInput(attrs={'class': 'form-input', 'type': 'date'}),
+        help_text='Local Professional accounts require you to be 18 or over.',
+    )
     password         = forms.CharField(widget=forms.PasswordInput(attrs={'class': 'form-input', 'placeholder': 'At least 8 characters'}))
     password_confirm = forms.CharField(label='Confirm password', widget=forms.PasswordInput(attrs={'class': 'form-input', 'placeholder': 'Repeat password'}))
     # Provider profile
@@ -147,6 +216,7 @@ class TradieRegistrationForm(forms.Form):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields['trades'].choices = TradeCategory.get_choices()
+        self.fields['date_of_birth'].widget.attrs['max'] = date.today().isoformat()
 
     def clean_email(self):
         email = self.cleaned_data['email'].lower()
@@ -154,6 +224,12 @@ class TradieRegistrationForm(forms.Form):
             raise ValidationError('An account with this email already exists.')
         _validate_closed_beta_email(email, settings.BETA_GATE_TRADIE_SIGNUPS)
         return email
+
+    def clean_date_of_birth(self):
+        return _clean_minimum_age_dob(
+            self.cleaned_data.get('date_of_birth'), User.AGE_OF_MAJORITY,
+            "Local Professional accounts require you to be 18 or over. If you're 16 or 17 you can create a Client account.",
+        )
 
     def clean_tin_letter(self):
         return _clean_verification_document(self.cleaned_data.get('tin_letter'))
@@ -188,6 +264,7 @@ class TradieRegistrationForm(forms.Form):
                 mobile=cd['mobile'],
                 town=cd['town'],
                 role=User.ROLE_TRADIE,
+                date_of_birth=cd['date_of_birth'],
             )
             # Lock the (singleton) PlatformSettings row as a mutex so
             # concurrent registrations can't all read the same pre-commit
@@ -598,9 +675,11 @@ class PrivateReviewForm(forms.Form):
 class ContactSupportForm(forms.Form):
     TOPIC_GENERAL        = 'general'
     TOPIC_REPORT_PROBLEM = 'report_problem'
+    TOPIC_CHILD_SAFETY   = 'child_safety'
     TOPIC_CHOICES = [
         (TOPIC_GENERAL,        'General inquiry'),
         (TOPIC_REPORT_PROBLEM, 'Report a problem'),
+        (TOPIC_CHILD_SAFETY,   'Child safety concern'),
     ]
     topic   = forms.ChoiceField(choices=TOPIC_CHOICES, initial=TOPIC_GENERAL, widget=_select())
     name    = forms.CharField(max_length=100, widget=_input('Your name'))
@@ -836,6 +915,11 @@ class SupplierRegistrationForm(forms.Form):
     email            = forms.EmailField(widget=_input('you@example.fj', type_='email'))
     mobile           = forms.CharField(max_length=20,  widget=_input('+679 XXX XXXX'))
     town             = forms.ChoiceField(choices=[('', 'Select town…')] + list(TOWN_CHOICES), widget=_select())
+    date_of_birth    = forms.DateField(
+        label='Date of birth',
+        widget=forms.DateInput(attrs={'class': 'form-input', 'type': 'date'}),
+        help_text='Supplier accounts require you to be 18 or over.',
+    )
     password         = forms.CharField(widget=forms.PasswordInput(attrs={'class': 'form-input', 'placeholder': 'At least 8 characters'}))
     password_confirm = forms.CharField(label='Confirm password', widget=forms.PasswordInput(attrs={'class': 'form-input', 'placeholder': 'Repeat password'}))
     business_name    = forms.CharField(max_length=100, required=False, label='Business Name (optional)', widget=_input('e.g. Pacific Supplies Ltd'))
@@ -854,12 +938,19 @@ class SupplierRegistrationForm(forms.Form):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields['supply_categories'].choices = SupplyCategory.get_choices()
+        self.fields['date_of_birth'].widget.attrs['max'] = date.today().isoformat()
 
     def clean_email(self):
         email = self.cleaned_data['email'].lower()
         if User.objects.filter(email=email).exists():
             raise ValidationError('An account with this email already exists.')
         return email
+
+    def clean_date_of_birth(self):
+        return _clean_minimum_age_dob(
+            self.cleaned_data.get('date_of_birth'), User.AGE_OF_MAJORITY,
+            "Supplier accounts require you to be 18 or over. If you're 16 or 17 you can create a Client account.",
+        )
 
     def clean_tin_letter(self):
         return _clean_verification_document(self.cleaned_data.get('tin_letter'))
@@ -892,6 +983,7 @@ class SupplierRegistrationForm(forms.Form):
                 mobile=cd['mobile'],
                 town=cd['town'],
                 role=User.ROLE_SUPPLIER,
+                date_of_birth=cd['date_of_birth'],
             )
             profile = SupplierProfile(
                 user=user,

@@ -303,6 +303,7 @@ class ClosedBetaAndApprovalFlowTests(TestCase):
                 'town': 'Suva',
                 'password': 'pass12345',
                 'password_confirm': 'pass12345',
+                'date_of_birth': '2000-01-01',
                 'accepted_terms': 'on',
             },
             secure=True,
@@ -326,6 +327,7 @@ class ClosedBetaAndApprovalFlowTests(TestCase):
                 'town': 'Suva',
                 'password': 'pass12345',
                 'password_confirm': 'pass12345',
+                'date_of_birth': '2000-01-01',
                 'business_name': 'Invited Services',
                 'tin': 'P123',
                 'years_experience': '1-3 years',
@@ -356,6 +358,7 @@ class ClosedBetaAndApprovalFlowTests(TestCase):
                 'town': 'Suva',
                 'password': 'pass12345',
                 'password_confirm': 'pass12345',
+                'date_of_birth': '2000-01-01',
                 'business_name': '',
                 'tin': '',
                 'years_experience': '1-3 years',
@@ -1609,6 +1612,7 @@ class VerificationDocumentUploadValidationTests(TestCase):
         return {
             'first_name': 'Doc', 'last_name': 'Test', 'email': 'doctest@example.com',
             'mobile': '+679 111 2222', 'town': 'Suva', 'password': 'pass12345', 'password_confirm': 'pass12345',
+            'date_of_birth': '2000-01-01',
             'business_name': '', 'tin': '', 'years_experience': '1-3 years', 'bio': 'Bio',
             'trades': ['cleaning'], 'service_towns': ['Suva'],
             'accepted_terms': 'on', 'accepted_platform_circumvention': 'on', 'accepted_invoicing_terms': 'on',
@@ -3277,7 +3281,7 @@ class WorkspaceWiringIntegrationTests(TestCase):
             reverse('register_client'),
             {
                 'first_name': 'New', 'last_name': 'Reg', 'email': 'new-reg-client@example.com',
-                'mobile': '+679 123 4567', 'town': 'Suva',
+                'mobile': '+679 123 4567', 'town': 'Suva', 'date_of_birth': '2000-01-01',
                 'password': 'pass12345', 'password_confirm': 'pass12345', 'accepted_terms': 'on',
             },
             secure=True,
@@ -3292,7 +3296,7 @@ class WorkspaceWiringIntegrationTests(TestCase):
             reverse('register_tradie'),
             {
                 'first_name': 'New', 'last_name': 'Tradie', 'email': 'new-reg-tradie@example.com',
-                'mobile': '+679 111 2222', 'town': 'Suva',
+                'mobile': '+679 111 2222', 'town': 'Suva', 'date_of_birth': '2000-01-01',
                 'password': 'pass12345', 'password_confirm': 'pass12345',
                 'business_name': '', 'tin': '', 'years_experience': '1-3 years',
                 'bio': 'Bio', 'trades': ['cleaning'], 'service_towns': ['Suva'],
@@ -3702,6 +3706,7 @@ class SupplierRegistrationWorkspaceGapFixTests(TestCase):
             data={
                 'first_name': 'Sup', 'last_name': 'Plier', 'email': 'supfix@example.com',
                 'mobile': '+679 000 0000', 'town': 'Suva', 'password': 'pass12345', 'password_confirm': 'pass12345',
+                'date_of_birth': '2000-01-01',
                 'business_name': '', 'tin': '', 'bio': '',
                 'supply_categories': ['building-materials'], 'service_towns': ['Suva'],
                 'accepted_terms': 'on',

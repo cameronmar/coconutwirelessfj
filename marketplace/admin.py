@@ -1377,17 +1377,31 @@ class SupplierMessageAdmin(admin.ModelAdmin):
 
 @admin.register(ContentReport)
 class ContentReportAdmin(admin.ModelAdmin):
-    list_display = ('reported_user', 'reason', 'report_type', 'status', 'reporter', 'created_at')
+    list_display = ('safety_flag', 'reported_user', 'reason', 'report_type', 'status', 'reporter', 'created_at')
     list_filter = ('status', 'reason', 'report_type', 'created_at')
     search_fields = ('reporter__email', 'reported_user__email', 'details')
     raw_id_fields = ('reporter', 'reported_user', 'task', 'reviewed_by')
-    readonly_fields = ('reporter', 'reported_user', 'report_type', 'task', 'reference_note', 'reason', 'details', 'created_at')
+    readonly_fields = ('reporter', 'reported_user', 'report_type', 'task', 'reference_note', 'reason', 'details', 'created_at', 'escalated_at')
     actions = ['mark_actioned', 'mark_dismissed']
 
     fieldsets = (
-        ('Report', {'fields': ('reporter', 'reported_user', 'report_type', 'task', 'reference_note', 'reason', 'details', 'created_at')}),
+        ('Report', {'fields': ('reporter', 'reported_user', 'report_type', 'task', 'reference_note', 'reason', 'details', 'created_at', 'escalated_at')}),
         ('Review', {'fields': ('status', 'reviewed_by', 'reviewed_at', 'resolution_note')}),
     )
+
+    def get_queryset(self, request):
+        """Child safety reports are prioritised ahead of every other report
+        type (Terms §13.7 / Child Safety Standard) — surface them first in
+        the queue regardless of the default '-created_at' ordering. Postgres
+        treats NULL as the largest value for DESC ordering by default (the
+        opposite of what we want here), so nulls_last is explicit rather
+        than relying on the backend's default."""
+        from django.db.models import F
+        return super().get_queryset(request).order_by(F('escalated_at').desc(nulls_last=True), 'status', '-created_at')
+
+    @admin.display(description='', boolean=True)
+    def safety_flag(self, obj):
+        return obj.is_child_safety
 
     @admin.action(description='Mark selected reports as actioned')
     def mark_actioned(self, request, queryset):

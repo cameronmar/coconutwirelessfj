@@ -53,6 +53,12 @@
           <div class="field"><label for="id_mobile">Mobile</label>{{ form.mobile }}{% for e in form.mobile.errors %}<div class="field-error">{{e}}</div>{% endfor %}</div>
           <div class="field"><label for="id_town">Town / Base</label>{{ form.town }}{% for e in form.town.errors %}<div class="field-error">{{e}}</div>{% endfor %}</div>
         </div>
+        <div class="field">
+          <label for="id_date_of_birth">Date of birth</label>
+          {{ form.date_of_birth }}
+          <div class="hint" style="font-size:.78rem;color:var(--muted);margin-top:4px;">{{ form.date_of_birth.help_text }}</div>
+          {% for e in form.date_of_birth.errors %}<div class="field-error">{{e}}</div>{% endfor %}
+        </div>
         <div class="row2">
           <div class="field">
             <label for="id_password">Password</label>

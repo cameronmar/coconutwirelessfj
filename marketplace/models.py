@@ -1,3 +1,4 @@
+from datetime import date
 from decimal import Decimal
 
 from django.contrib.auth.models import AbstractUser, BaseUserManager
@@ -93,6 +94,20 @@ class User(AbstractUser):
     # marks when that happened.
     account_deleted_at = models.DateTimeField(null=True, blank=True)
 
+    # 16-17 audience support (Terms §2 / Privacy §9). date_of_birth is null
+    # for every account created before the age screen shipped — those users
+    # attested 18+ under the Terms version in force at the time, so a null
+    # DOB is treated as adult everywhere (see is_minor) rather than forcing
+    # a re-verification flow on accounts that already exist.
+    date_of_birth        = models.DateField(null=True, blank=True)
+    guardian_name         = models.CharField(max_length=120, blank=True)
+    guardian_contact      = models.CharField(max_length=120, blank=True, help_text='Parent/guardian phone or email')
+    guardian_consent_at   = models.DateTimeField(null=True, blank=True)
+    guardian_consent_ip   = models.GenericIPAddressField(null=True, blank=True)
+
+    MINOR_AGE_FLOOR  = 16
+    AGE_OF_MAJORITY  = 18
+
     USERNAME_FIELD  = 'email'
     REQUIRED_FIELDS = []
 
@@ -113,6 +128,23 @@ class User(AbstractUser):
 
     def can_preview_unlaunched_features(self):
         return self.is_staff or self.is_tester
+
+    @property
+    def age(self):
+        if not self.date_of_birth:
+            return None
+        today = date.today()
+        return today.year - self.date_of_birth.year - (
+            (today.month, today.day) < (self.date_of_birth.month, self.date_of_birth.day)
+        )
+
+    @property
+    def is_minor(self):
+        """True for a 16-17 year old account. A legacy account with no
+        date_of_birth on file is treated as adult — it attested 18+ under
+        the Terms version in force when it registered."""
+        a = self.age
+        return a is not None and a < self.AGE_OF_MAJORITY
 
 
 # ── Tradie profile ────────────────────────────────────────────────────────────
@@ -785,6 +817,12 @@ class Quote(models.Model):
     promo_code                      = models.ForeignKey('PromoCode', null=True, blank=True, on_delete=models.SET_NULL, related_name='quotes')
     estimated_discount_amount       = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
 
+    # Set when the task's client is a Minor User (Terms §2/§12) — the
+    # provider ticked the "this client is under 18" acknowledgement in
+    # submit_quote() before the quote would be accepted. False/unset for
+    # every quote on an adult client's task.
+    acknowledged_minor_client        = models.BooleanField(default=False, verbose_name='Acknowledged client is under 18')
+
     class Meta:
         unique_together = ('task', 'tradie')
         ordering = ['created_at']
@@ -1118,7 +1156,7 @@ class PlatformSettings(models.Model):
         help_text='Fee percentage for large jobs over threshold'
     )
     terms_version = models.CharField(
-        max_length=20, default='1.1',
+        max_length=20, default='1.2',
         help_text='Active terms version presented to users at registration'
     )
     active        = models.BooleanField(default=True)
@@ -1862,12 +1900,14 @@ class ContentReport(models.Model):
     """User-submitted report of abusive/inappropriate content or conduct —
     reviewed by staff in the admin (see admin.py). Not auto-actioned;
     staff decide the outcome and record it here."""
+    REASON_CHILD_SAFETY   = 'child_safety'
     REASON_SPAM           = 'spam'
     REASON_HARASSMENT     = 'harassment'
     REASON_INAPPROPRIATE  = 'inappropriate'
     REASON_FRAUD          = 'fraud'
     REASON_OTHER          = 'other'
     REASON_CHOICES = [
+        (REASON_CHILD_SAFETY,  'Child safety concern'),
         (REASON_SPAM,          'Spam or scam'),
         (REASON_HARASSMENT,    'Harassment or abuse'),
         (REASON_INAPPROPRIATE, 'Inappropriate content'),
@@ -1911,6 +1951,11 @@ class ContentReport(models.Model):
     reviewed_at     = models.DateTimeField(null=True, blank=True)
     resolution_note = models.TextField(blank=True)
 
+    # Set the moment a child_safety report is filed (see report_content) —
+    # records when the designated child safety contact was notified, for
+    # audit purposes under Terms §13.7 / the Child Safety Standard page.
+    escalated_at = models.DateTimeField(null=True, blank=True)
+
     class Meta:
         ordering = ['-created_at']
         verbose_name = 'Content Report'
@@ -1918,6 +1963,10 @@ class ContentReport(models.Model):
 
     def __str__(self):
         return f'Report by {self.reporter} – {self.get_reason_display()} ({self.status})'
+
+    @property
+    def is_child_safety(self):
+        return self.reason == self.REASON_CHILD_SAFETY
 
 
 class UserBlock(models.Model):

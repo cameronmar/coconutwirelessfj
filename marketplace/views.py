@@ -261,6 +261,10 @@ def privacy(request):
     return render(request, 'marketplace/privacy.html')
 
 
+def child_safety(request):
+    return render(request, 'marketplace/child_safety.html')
+
+
 def contact_support(request):
     """
     Sitewide "Contact" page (footer link, and a dashboard sidebar link for
@@ -282,8 +286,9 @@ def contact_support(request):
             else:
                 who = f'{cd["name"]} ({cd["email"]}) — not logged in'
             topic_label = dict(ContactSupportForm.TOPIC_CHOICES).get(cd['topic'], cd['topic'])
+            subject_prefix = 'URGENT — Child safety concern' if cd['topic'] == ContactSupportForm.TOPIC_CHILD_SAFETY else topic_label
             notify_admin(
-                subject=f'[{topic_label}] {cd["subject"]}',
+                subject=f'[{subject_prefix}] {cd["subject"]}',
                 body=(
                     f'From: {who}\n'
                     f'Topic: {topic_label}\n'
@@ -321,12 +326,33 @@ def healthz(request):
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
 
+AGE_GATE_RETRY_LOCKOUT_SECONDS = 24 * 60 * 60
+
+
+def _age_gate_locked(request):
+    """True if this session already failed the under-16 age floor within
+    the last 24h — Google Play's age-screen neutrality requirement expects
+    a rejected session not be able to just retry with a different DOB
+    hoping for a passing answer."""
+    failed_at = request.session.get('age_gate_failed_at')
+    if not failed_at:
+        return False
+    return (timezone.now() - datetime.fromisoformat(failed_at)).total_seconds() < AGE_GATE_RETRY_LOCKOUT_SECONDS
+
+
 def register_client(request):
     if request.user.is_authenticated:
         return redirect('dashboard')
+    if request.method == 'POST' and _age_gate_locked(request):
+        flash.error(request, 'You must be at least 16 years old to create an account. If you entered your date of birth incorrectly, contact us via the Support page.')
+        return render(request, 'marketplace/register_client.html', {
+            'form': ClientRegistrationForm(),
+            'closed_beta_enabled': settings.CLOSED_BETA_ENABLED,
+            'beta_gate_clients': settings.BETA_GATE_CLIENT_SIGNUPS,
+        })
     form = ClientRegistrationForm(request.POST or None)
     if request.method == 'POST' and form.is_valid():
-        user = form.save()
+        user = form.save(request=request)
         settings_obj = PlatformSettings.get_active()
         TermsAcceptance.objects.create(
             user=user,
@@ -338,6 +364,8 @@ def register_client(request):
         send_welcome_notice(user)
         flash.success(request, f'Bula, {user.first_name}! Your client account is ready.')
         return redirect('client_dashboard')
+    if request.method == 'POST' and getattr(form, 'under_age_rejected', False):
+        request.session['age_gate_failed_at'] = timezone.now().isoformat()
     return render(request, 'marketplace/register_client.html', {
         'form': form,
         'closed_beta_enabled': settings.CLOSED_BETA_ENABLED,
@@ -766,6 +794,13 @@ def post_task(request):
     _require_task_poster(request)
     form = TaskForm(request.POST or None)
     if request.method == 'POST' and form.is_valid():
+        budget = form.cleaned_data.get('budget')
+        if request.user.is_minor and budget is not None and budget > settings.MINOR_TASK_BUDGET_CAP_FJD:
+            flash.error(request, f'Client accounts for 16-17 year olds are capped at FJD ${settings.MINOR_TASK_BUDGET_CAP_FJD:.2f} per task.')
+            return render(request, 'marketplace/post_task.html', {
+                'form': form,
+                'category_choices': TradeCategory.get_choices(),
+            })
         task = form.save(commit=False)
         task.client = request.user
         task.client_workspace = workspaces.resolve_client_workspace_for_write(request.user, 'post_task')
@@ -930,11 +965,15 @@ def submit_quote(request, pk):
     if Quote.objects.filter(task=task, tradie=request.user).exists():
         flash.error(request, 'You have already quoted on this task.')
         return redirect('task_detail', pk=pk)
+    if task.client.is_minor and not request.POST.get('acknowledged_minor_client'):
+        flash.error(request, 'You must confirm the under-18 client acknowledgement before quoting on this task.')
+        return redirect('task_detail', pk=pk)
     form = QuoteForm(request.POST)
     if form.is_valid():
         q = form.save(commit=False)
         q.task   = task
         q.tradie = request.user
+        q.acknowledged_minor_client = task.client.is_minor
         q.provider_workspace = workspaces.resolve_individual_provider_workspace_for_write(request.user, 'submit_quote')
         q.customer_facing_quote = q.price
         q.client_quote_total = q.price
@@ -1481,6 +1520,9 @@ def add_role_choose(request):
 def add_role_tradie(request):
     if hasattr(request.user, 'tradie_profile'):
         raise PermissionDenied
+    if request.user.is_minor:
+        flash.error(request, "Local Professional accounts require you to be 18 or over. If you're 16 or 17 you can create a Client account.")
+        return redirect('account_linking_hub')
     form = AddTradieRoleForm(request.POST or None, request.FILES or None, user=request.user)
     if request.method == 'POST' and form.is_valid():
         user = form.save()
@@ -1508,6 +1550,9 @@ def add_role_tradie(request):
 def add_role_supplier(request):
     if hasattr(request.user, 'supplier_profile'):
         raise PermissionDenied
+    if request.user.is_minor:
+        flash.error(request, "Supplier accounts require you to be 18 or over. If you're 16 or 17 you can create a Client account.")
+        return redirect('account_linking_hub')
     form = AddSupplierRoleForm(request.POST or None, request.FILES or None, user=request.user)
     if request.method == 'POST' and form.is_valid():
         user = form.save()
@@ -1634,7 +1679,8 @@ def report_content(request):
 
     form = ContentReportForm(request.POST)
     if form.is_valid():
-        ContentReport.objects.create(
+        is_child_safety = form.cleaned_data['reason'] == ContentReport.REASON_CHILD_SAFETY
+        report = ContentReport.objects.create(
             reporter=request.user,
             reported_user=reported_user,
             report_type=report_type if report_type in dict(ContentReport.TYPE_CHOICES) else ContentReport.TYPE_USER,
@@ -1642,7 +1688,25 @@ def report_content(request):
             reference_note=reference_note,
             reason=form.cleaned_data['reason'],
             details=form.cleaned_data['details'],
+            escalated_at=timezone.now() if is_child_safety else None,
         )
+        if is_child_safety:
+            # Child safety reports are prioritised ahead of all other report
+            # types (Terms §13.7 / Child Safety Standard) — notify the
+            # designated child safety contact immediately rather than
+            # waiting for the admin queue to be checked.
+            notify_admin(
+                subject=f'[URGENT — Child safety report #{report.pk}]',
+                body=(
+                    f'Reporter: {request.user.full_name} ({request.user.email})\n'
+                    f'Reported user: {reported_user.full_name} ({reported_user.email})\n'
+                    f'Type: {report.get_report_type_display()}\n'
+                    f'Task: {task.title if task else "—"}\n'
+                    f'Details: {form.cleaned_data["details"] or "(none provided)"}\n\n'
+                    'Review immediately in the admin Content Reports queue.'
+                ),
+                to_email=settings.CHILD_SAFETY_CONTACT_EMAIL,
+            )
         flash.success(request, 'Thanks — your report has been sent to our team for review.')
     else:
         flash.error(request, 'Please select a reason for your report.')

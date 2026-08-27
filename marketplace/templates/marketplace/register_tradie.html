@@ -59,6 +59,12 @@
           <div class="field"><label for="id_mobile">Mobile</label>{{ form.mobile }}{% for e in form.mobile.errors %}<div class="field-error">{{e}}</div>{% endfor %}</div>
           <div class="field"><label for="id_town">Town / Service Area</label>{{ form.town }}{% for e in form.town.errors %}<div class="field-error">{{e}}</div>{% endfor %}</div>
         </div>
+        <div class="field">
+          <label for="id_date_of_birth">Date of birth</label>
+          {{ form.date_of_birth }}
+          <div class="hint" style="font-size:.78rem;color:var(--muted);margin-top:4px;">{{ form.date_of_birth.help_text }}</div>
+          {% for e in form.date_of_birth.errors %}<div class="field-error">{{e}}</div>{% endfor %}
+        </div>
         <div class="row2">
           <div class="field">
             <label for="id_password">Password</label>
@@ -178,7 +184,7 @@
 
       <div class="check-row">
         {{ form.accepted_terms }}
-        <span>I agree to the <a href="{% url 'terms' %}" target="_blank">Terms &amp; Conditions, Privacy Policy and Platform Rules</a></span>
+        <span>I agree to the <a href="{% url 'terms' %}" target="_blank">Terms &amp; Conditions, Privacy Policy and Platform Rules</a>, including that some clients may be 16-17 year olds using the Platform with parent/guardian consent (<a href="{% url 'terms' %}#eligibility" target="_blank">Terms §2.5</a>) — I will not perform work that would be unlawful to provide to a person under 18.</span>
       </div>
       {% for e in form.accepted_terms.errors %}<div class="field-error" style="margin-bottom:8px;">{{ e }}</div>{% endfor %}
 

@@ -1,0 +1,60 @@
+{% extends "marketplace/base.html" %}
+{% block title %}Child Safety Standard – The Coconut Wireless Network{% endblock %}
+{% block meta_description %}The Coconut Wireless Network's commitment to child safety, how to report a concern, and how we handle it.{% endblock %}
+
+{% block extra_css %}
+<style>
+.terms-page{max-width:820px;margin:0 auto;padding:40px 20px 80px;}
+.terms-page h1{font-size:1.8rem;margin:0 0 6px;}
+.terms-page .version{font-size:.82rem;color:var(--muted);margin-bottom:32px;}
+.terms-page h2{font-size:1.1rem;color:var(--blue);margin:36px 0 10px;padding-bottom:7px;border-bottom:2px solid var(--blue-light);}
+.terms-page p{font-size:.9rem;color:var(--muted);line-height:1.8;margin:0 0 12px;}
+.terms-page ul{font-size:.9rem;color:var(--muted);line-height:1.8;margin:0 0 12px;padding-left:22px;}
+.terms-page li{margin-bottom:5px;}
+.terms-page .highlight-box{background:#fff8e6;border-left:4px solid #f5a623;border-radius:0 8px 8px 0;padding:12px 16px;margin:14px 0;}
+.terms-page .highlight-box p{color:var(--text);margin:0;}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container">
+<div class="terms-page">
+
+  <h1>Child Safety Standard</h1>
+  <p class="version">The Coconut Wireless Network · Version 1.0</p>
+
+  <h2>Our commitment</h2>
+  <p>The Coconut Wireless Network prohibits child sexual abuse and exploitation (CSAE) in any form, on any part of the Platform — content, messages, profiles, tasks, and conduct.</p>
+
+  <h2>Prohibited without exception</h2>
+  <ul>
+    <li>Child sexual abuse material;</li>
+    <li>Sexual solicitation of a minor;</li>
+    <li>Grooming;</li>
+    <li>Sexualised contact or commentary directed at a minor;</li>
+    <li>Any attempt to arrange contact with a minor for a sexual purpose; and</li>
+    <li>Any content that sexualises, endangers, or exploits a person under 18.</li>
+  </ul>
+
+  <h2>How to report</h2>
+  <p>Every task, profile, review, and message on the Platform has a Report option. For child-safety concerns, you can also contact us via our <a href="{% url 'contact_support' %}">Support page</a> and select "Child safety concern." Reports in this category are reviewed ahead of all other reports.</p>
+
+  <h2>What we do on a report</h2>
+  <p>Content is removed and the account is suspended pending review. Where review confirms CSAE or child-endangering conduct, the account is permanently terminated and the matter is reported to the National Center for Missing &amp; Exploited Children (NCMEC) and/or Fiji Police and any other authority required by law. We preserve associated records as required for law-enforcement purposes.</p>
+
+  <div class="highlight-box"><p>This is a zero-tolerance process — see <a href="{% url 'terms' %}#acceptable-use">Terms &amp; Conditions §13.3</a> for the full policy.</p></div>
+
+  <h2>Compliance</h2>
+  <p>We comply with applicable child-safety laws, including Fiji's Online Safety Act 2018, and the child-safety standards of the app stores and platforms we operate on (Google Play, Apple App Store, Meta). We have designated a child safety point of contact with authority over these processes.</p>
+
+  <h2>Minors on the Platform</h2>
+  <p>Users aged 16–17 may use the Platform as clients only, with parent/guardian consent, and with protections described in our <a href="{% url 'terms' %}">Terms &amp; Conditions</a> and <a href="{% url 'privacy' %}">Privacy Policy</a>: no advertising, restricted messaging, and an under-18 indicator shown to providers they engage.</p>
+
+  <p style="margin-top:48px;font-size:.82rem;color:var(--muted);border-top:1px solid var(--blue-light);padding-top:18px;">
+    The Coconut Wireless Network · Fiji · Version 1.0 ·
+    For questions contact us via the Platform.
+  </p>
+
+</div>
+</div>
+{% endblock %}

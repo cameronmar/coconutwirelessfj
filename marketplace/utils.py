@@ -771,7 +771,7 @@ def send_welcome_notice(user):
                 pass
 
 
-def notify_admin(subject, body, reply_to=None):
+def notify_admin(subject, body, reply_to=None, to_email=None):
     """
     Send an operational notification (support contact click, new tradie
     pending approval, etc.) to settings.ADMIN_EMAIL. Best-effort and silent
@@ -780,12 +780,16 @@ def notify_admin(subject, body, reply_to=None):
 
     Pass reply_to=[email] (e.g. a contact form submitter's address) so the
     admin can just hit Reply in their email client instead of copying it out.
+
+    Pass to_email to route to a specific address instead of ADMIN_EMAIL (e.g.
+    the designated child safety contact) — takes priority over ADMIN_EMAIL,
+    and sends even if ADMIN_EMAIL isn't configured.
     """
     from django.conf import settings as django_settings
     from django.core.mail import EmailMessage
 
-    admin_email = getattr(django_settings, 'ADMIN_EMAIL', '')
-    if not admin_email:
+    recipient = to_email or getattr(django_settings, 'ADMIN_EMAIL', '')
+    if not recipient:
         print(f'notify_admin: ADMIN_EMAIL not configured, skipping notification: {subject}', flush=True)
         return False
 
@@ -794,7 +798,7 @@ def notify_admin(subject, body, reply_to=None):
             subject=subject,
             body=body,
             from_email=getattr(django_settings, 'DEFAULT_FROM_EMAIL', 'noreply@coconutwireless.fj'),
-            to=[admin_email],
+            to=[recipient],
             reply_to=reply_to or None,
         ).send(fail_silently=False)
         return True

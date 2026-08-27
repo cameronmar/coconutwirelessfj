@@ -15,3 +15,14 @@ def beta_features(request):
     return {
         'suppliers_visible': settings.SUPPLIERS_ENABLED or can_preview,
     }
+
+
+def minor_session(request):
+    """Exposes whether the current viewer is a Minor User (16-17), for
+    templates that must never render sponsor banners/carousels to them
+    (Terms §12 / Privacy §9) — same "every page" problem beta_features
+    solves above."""
+    user = getattr(request, 'user', None)
+    return {
+        'is_minor_session': bool(user and user.is_authenticated and user.is_minor),
+    }
