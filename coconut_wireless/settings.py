@@ -111,6 +111,7 @@ TEMPLATES = [
                 'django.template.context_processors.media',
                 'marketplace.context_processors.beta_features',
                 'marketplace.context_processors.minor_session',
+                'marketplace.context_processors.header_counts',
             ],
         },
     },

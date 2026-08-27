@@ -16,6 +16,17 @@ nav a:hover{background:rgba(255,255,255,.15);}
 .btn-nav-solid{background:var(--white);color:var(--blue)!important;border-radius:20px;padding:6px 16px;font-weight:600;}
 .btn-nav-solid:hover{background:#d6eff8!important;}
 .nav-toggle{display:none;background:none;border:1.5px solid rgba(255,255,255,.5);border-radius:8px;color:var(--white);font-size:1.3rem;line-height:1;padding:6px 10px;cursor:pointer;}
+.hdr-icons{display:flex;align-items:center;gap:4px;}
+.hdr-icon-link{position:relative;display:inline-flex;align-items:center;justify-content:center;min-width:40px;min-height:40px;color:rgba(255,255,255,.88);text-decoration:none;font-size:1.15rem;border-radius:10px;}
+.hdr-icon-link:hover{background:rgba(255,255,255,.15);}
+.hdr-badge{position:absolute;top:2px;right:2px;background:#e74c3c;color:#fff;font-size:.62rem;font-weight:700;line-height:1;min-width:15px;height:15px;border-radius:8px;display:flex;align-items:center;justify-content:center;padding:0 3px;}
+.account-menu{position:relative;}
+.account-toggle{background:none;border:1.5px solid rgba(255,255,255,.5);border-radius:20px;color:var(--white);font-size:.88rem;font-family:inherit;min-height:40px;padding:6px 14px;cursor:pointer;}
+.account-toggle:hover{background:rgba(255,255,255,.15);}
+.account-dropdown{display:none;position:absolute;top:calc(100% + 8px);right:0;background:var(--white);border-radius:12px;box-shadow:0 8px 24px rgba(0,40,60,.18);padding:8px;min-width:250px;z-index:50;}
+.account-dropdown.open{display:block;}
+.account-dropdown a{display:block;padding:9px 14px;border-radius:8px;color:var(--text);text-decoration:none;font-size:.88rem;white-space:nowrap;}
+.account-dropdown a:hover{background:var(--blue-light);color:var(--blue);}
 @media(max-width:760px){
   .nav-toggle{display:block;}
   nav{display:none;width:100%;flex-direction:column;align-items:stretch;gap:2px;margin-top:10px;}
