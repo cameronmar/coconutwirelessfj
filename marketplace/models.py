@@ -581,6 +581,28 @@ class TradeCategory(models.Model):
         return dict(cls.get_choices())
 
 
+# ── Service search analytics ──────────────────────────────────────────────────
+
+class ServiceSearch(models.Model):
+    """One row per provider-directory search (browse_tradies) — first-party
+    product analytics only, no third parties/ad SDKs, no new personal data
+    beyond the optional user FK (see Privacy Policy). Zero-result rows are
+    the signal: they show unmet demand to target for professional
+    recruitment."""
+    query_text    = models.CharField(max_length=200, blank=True)
+    matched_trade = models.ForeignKey('TradeCategory', null=True, blank=True, on_delete=models.SET_NULL)
+    town          = models.CharField(max_length=50, blank=True)
+    result_count  = models.PositiveIntegerField(default=0)
+    user          = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
+    created_at    = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [models.Index(fields=['matched_trade', 'town']), models.Index(fields=['created_at'])]
+
+    def __str__(self):
+        return f'"{self.query_text}" – {self.result_count} result(s) ({self.created_at:%Y-%m-%d})'
+
+
 class Task(models.Model):
     STATUS_OPEN        = 'open'
     STATUS_ASSIGNED    = 'assigned'

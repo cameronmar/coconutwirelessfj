@@ -32,6 +32,7 @@ from .models import (
     Quote,
     QuotingAppointment,
     QuotingAppointmentSlot,
+    ServiceSearch,
     Sponsor,
     SupplyCategory,
     SupplierProfile,
@@ -687,6 +688,41 @@ class TradeCategoryAdmin(admin.ModelAdmin):
     list_display = ['name', 'slug', 'icon', 'parent', 'active']
     prepopulated_fields = {'slug': ('name',)}
     search_fields = ['name', 'slug']
+
+
+# ── Service search analytics ──────────────────────────────────────────────────
+
+class HasResultsFilter(admin.SimpleListFilter):
+    """One-click filter to surface unmet demand — searches that returned no
+    providers are exactly the recruitment-targeting signal this log exists
+    for (see ServiceSearch docstring)."""
+    title = 'results'
+    parameter_name = 'has_results'
+
+    def lookups(self, request, model_admin):
+        return (('0', 'Zero results'), ('1', 'Has results'))
+
+    def queryset(self, request, queryset):
+        if self.value() == '0':
+            return queryset.filter(result_count=0)
+        if self.value() == '1':
+            return queryset.filter(result_count__gt=0)
+        return queryset
+
+
+@admin.register(ServiceSearch)
+class ServiceSearchAdmin(admin.ModelAdmin):
+    list_display = ['created_at', 'query_text', 'matched_trade', 'town', 'result_count', 'user']
+    list_filter = ['matched_trade', 'town', 'created_at', HasResultsFilter]
+    search_fields = ['query_text']
+    date_hierarchy = 'created_at'
+    raw_id_fields = ['user']
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
 
 
 # ── Task Photo ────────────────────────────────────────────────────────────────

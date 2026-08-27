@@ -73,6 +73,7 @@ from .models import (
     Quote,
     QuotingAppointment,
     QuotingAppointmentSlot,
+    ServiceSearch,
     Sponsor,
     UserBlock,
     SupplierEnquiry,
@@ -716,6 +717,60 @@ def browse_tasks(request):
 
 # ── Browse local professionals ──────────────────────────────────────────────────
 
+def resolve_trade_from_text(text):
+    """Best-effort match of free text (e.g. 'electrician') to a TradeCategory,
+    so a homepage search for a profession narrows the provider directory by
+    trade rather than only keyword-matching provider names/bios. Returns the
+    matched TradeCategory.slug, or None. The category list is small, so one
+    light query beats trying to reuse get_choices()'s cached icon-prefixed
+    labels, which aren't suitable for text matching.
+
+    Tries, in order: exact name match, exact slug match, then — only when
+    the whole query is a single word — substring either direction and a
+    shared-prefix check.
+
+    The prefix check exists because category names are stored in
+    adjective/trade form ("Electrical", "Plumbing") while people search in
+    profession-noun form ("electrician", "plumber") — those share a long
+    common prefix but neither is a substring of the other, so substring
+    matching alone misses the single most common real-world search pattern.
+
+    The fuzzy tiers (substring, prefix) are restricted to single-word input
+    because a multi-word business name that happens to mention a trade —
+    "Joe's Plumbing" contains the substring "plumbing" — must NOT hijack
+    that search into a bare category filter; it needs to fall through to
+    the keyword/business-name search instead. A single exact word carries
+    no such risk, so the exact-match tiers above are never restricted.
+    """
+    text = (text or '').strip().lower()
+    if not text:
+        return None
+    categories = list(TradeCategory.objects.filter(active=True).values_list('slug', 'name'))
+    for slug, name in categories:
+        if name.lower() == text:
+            return slug
+    for slug, name in categories:
+        if slug.lower() == text:
+            return slug
+    if len(text.split()) > 1:
+        return None
+    for slug, name in categories:
+        name_lower = name.lower()
+        if name_lower in text or text in name_lower:
+            return slug
+    for slug, name in categories:
+        name_lower = name.lower()
+        prefix_len = 0
+        for a, b in zip(text, name_lower):
+            if a != b:
+                break
+            prefix_len += 1
+        shorter_len = min(len(text), len(name_lower))
+        if prefix_len >= 4 and shorter_len and prefix_len / shorter_len >= 0.7:
+            return slug
+    return None
+
+
 def browse_tradies(request):
     # Trade/town are JSONField lists — same cross-DB portability limitation
     # noted elsewhere (Sponsor.placements, MarketListing.available_dates):
@@ -731,6 +786,20 @@ def browse_tradies(request):
     town     = request.GET.get('town', '').strip()
     keyword  = request.GET.get('q', '').strip()
 
+    # An explicit ?category= (e.g. from the homepage's Popular services
+    # cards) always wins. Otherwise, try to resolve free text like
+    # "electrician" to a trade so the directory narrows by profession
+    # instead of only keyword-matching provider names/bios.
+    matched_trade = None
+    matched_trade_obj = None
+    resolved_slug = None
+    if not category and keyword:
+        resolved_slug = resolve_trade_from_text(keyword)
+        if resolved_slug:
+            category = resolved_slug
+            matched_trade_obj = TradeCategory.objects.filter(slug=resolved_slug).first()
+            matched_trade = matched_trade_obj.name if matched_trade_obj else None
+
     qs = (
         TradieProfile.objects.filter(
             verification_status__in=[TradieProfile.VERIFICATION_PENDING, TradieProfile.VERIFICATION_APPROVED]
@@ -738,7 +807,10 @@ def browse_tradies(request):
         .select_related('user')
         .order_by('verification_status', 'business_name')
     )
-    if keyword:
+    if keyword and not resolved_slug:
+        # Only fall back to the keyword search when it didn't resolve to a
+        # trade — otherwise "electrician" would also filter out every
+        # profile whose bio/name doesn't literally contain that word.
         qs = qs.filter(
             Q(business_name__icontains=keyword) | Q(bio__icontains=keyword)
             | Q(user__first_name__icontains=keyword) | Q(user__last_name__icontains=keyword)
@@ -749,6 +821,23 @@ def browse_tradies(request):
         profiles = [p for p in profiles if category in (p.trades or [])]
     if town:
         profiles = [p for p in profiles if town in (p.service_towns or [])]
+
+    result_count = len(profiles)  # before pagination — the real match count for a search
+
+    # Best-effort search logging for recruitment analytics (Privacy Policy —
+    # first-party only, no IP/new personal data). One row per search, not
+    # per pagination click, and only when a search was actually made.
+    if (keyword or category or town) and not request.GET.get('page'):
+        try:
+            ServiceSearch.objects.create(
+                query_text=keyword,
+                matched_trade=matched_trade_obj,
+                town=town,
+                result_count=result_count,
+                user=request.user if request.user.is_authenticated else None,
+            )
+        except Exception:
+            pass
 
     page_obj = Paginator(profiles, 20).get_page(request.GET.get('page'))
     profiles = list(page_obj)
@@ -786,6 +875,7 @@ def browse_tradies(request):
         'category_filter':  category,
         'town_filter':      town,
         'keyword_filter':   keyword,
+        'matched_trade':    matched_trade,
         'category_choices': TradeCategory.get_choices(),
         'town_choices':     TOWN_CHOICES,
     })

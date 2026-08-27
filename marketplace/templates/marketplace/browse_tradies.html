@@ -28,7 +28,11 @@
 <div class="pro-hdr">
   <div class="container">
     <h1>🔍 Find a local professional</h1>
-    <p>Browse local professionals by trade and town. Some are still awaiting verification — look for the "Pending verification" badge.</p>
+    {% if matched_trade %}
+      <p>Showing {{ matched_trade }} professionals{% if town_filter %} in {{ town_filter }}{% endif %}.</p>
+    {% else %}
+      <p>Browse local professionals by trade and town. Some are still awaiting verification — look for the "Pending verification" badge.</p>
+    {% endif %}
     <form method="get" class="pro-filters">
       <input type="text" name="q" placeholder="Search by name or business…" value="{{ keyword_filter }}">
       <select name="category">
@@ -73,8 +77,13 @@
     </a>
     {% empty %}
     <div class="empty" style="grid-column:1/-1;">
-      <p style="font-size:1.5rem">🔍</p>
-      <p>No local professionals match yet.</p>
+      <p style="font-size:2.4rem;margin-bottom:4px;">🔍</p>
+      <p style="font-weight:700;color:var(--text);margin-bottom:6px;">We're sorry — our network is still growing.</p>
+      <p>
+        We couldn't find a match for
+        "{% if matched_trade %}{{ matched_trade }}{% if town_filter %} in {{ town_filter }}{% endif %}{% elif keyword_filter %}{{ keyword_filter }}{% elif category_filter %}{{ category_filter|title }}{% if town_filter %} in {{ town_filter }}{% endif %}{% elif town_filter %}{{ town_filter }}{% else %}your search{% endif %}"
+        yet, but we're working hard to bring more local professionals on board. Try a nearby town or a broader search, and check back soon.
+      </p>
     </div>
     {% endfor %}
   </div>
