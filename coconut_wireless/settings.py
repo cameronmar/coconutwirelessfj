@@ -73,6 +73,23 @@ MESSENGER_CONNECTION_ENABLED = _get_bool_env('MESSENGER_CONNECTION_ENABLED', Fal
 MESSENGER_NOTIFICATIONS_ENABLED = _get_bool_env('MESSENGER_NOTIFICATIONS_ENABLED', False)
 MULTI_WORKSPACE_ENABLED = _get_bool_env('MULTI_WORKSPACE_ENABLED', False)
 
+# Google Sign-In. Off by default — nothing changes for any existing user
+# until this is set. No client secret exists in this flow (Google Identity
+# Services hands the browser a signed ID token; Django verifies it server-
+# side) so none is configured here, and none should ever be added.
+GOOGLE_LOGIN_ENABLED   = _get_bool_env('GOOGLE_LOGIN_ENABLED', False)
+GOOGLE_OAUTH_CLIENT_ID = os.environ.get('GOOGLE_OAUTH_CLIENT_ID', '').strip()
+# Android native sign-in sends a token minted for the Android OAuth client.
+# Both audiences must be accepted by the same endpoint (see views.google_auth).
+GOOGLE_OAUTH_ANDROID_CLIENT_ID = os.environ.get('GOOGLE_OAUTH_ANDROID_CLIENT_ID', '').strip()
+if GOOGLE_LOGIN_ENABLED and not GOOGLE_OAUTH_CLIENT_ID:
+    import logging
+    logging.getLogger(__name__).warning(
+        'GOOGLE_LOGIN_ENABLED is True but GOOGLE_OAUTH_CLIENT_ID is not set — '
+        'disabling Google sign-in rather than rendering a button that would 500.'
+    )
+    GOOGLE_LOGIN_ENABLED = False
+
 # ── Application definition ─────────────────────────────────────────────────────
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -110,6 +127,7 @@ TEMPLATES = [
                 'django.contrib.messages.context_processors.messages',
                 'django.template.context_processors.media',
                 'marketplace.context_processors.beta_features',
+                'marketplace.context_processors.google_login',
                 'marketplace.context_processors.minor_session',
                 'marketplace.context_processors.header_counts',
             ],

@@ -1,0 +1,55 @@
+{% comment %}
+Shared Google Identity Services button, included from login.html and the
+three registration pages. Uses GIS's JavaScript callback mode (data-callback),
+not data-login_uri — the login_uri mode posts a cross-origin form that can't
+carry the CSRF cookie, so it fails Django's CSRF check outright.
+
+Context vars this expects (all optional): next_url, role_hint.
+Renders nothing unless google_login_enabled (from context_processors.google_login).
+{% endcomment %}
+{% if google_login_enabled %}
+<div style="display:flex;align-items:center;gap:12px;margin:18px 0;color:var(--muted);font-size:.84rem;">
+  <div style="flex:1;height:1px;background:#dde8ef;"></div>
+  <span>or</span>
+  <div style="flex:1;height:1px;background:#dde8ef;"></div>
+</div>
+<div id="googleSignInError" class="field-error" style="display:none;margin-bottom:10px;"></div>
+<div id="g_id_onload"
+     data-client_id="{{ google_client_id }}"
+     data-nonce="{{ google_nonce }}"
+     data-callback="handleGoogleCredential"
+     data-auto_prompt="false"></div>
+<div class="g_id_signin" data-type="standard" data-shape="pill" data-theme="outline" data-text="continue_with" data-size="large" data-logo_alignment="left"></div>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script>
+(function () {
+  function getCsrfToken() {
+    var m = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
+    return m ? m[1] : '';
+  }
+  window.handleGoogleCredential = function (response) {
+    fetch("{% url 'google_auth' %}", {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCsrfToken() },
+      body: JSON.stringify({
+        credential: response.credential,
+        next: "{{ next_url|default:''|escapejs }}",
+        role: "{{ role_hint|default:'client'|escapejs }}",
+      }),
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d.redirect) { window.location = d.redirect; }
+        else if (d.error) {
+          var el = document.getElementById('googleSignInError');
+          if (el) { el.textContent = d.error; el.style.display = 'block'; }
+        }
+      })
+      .catch(function () {
+        var el = document.getElementById('googleSignInError');
+        if (el) { el.textContent = 'Something went wrong signing in with Google. Please try again.'; el.style.display = 'block'; }
+      });
+  };
+})();
+</script>
+{% endif %}

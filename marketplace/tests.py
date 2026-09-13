@@ -33,6 +33,7 @@ from .models import (
     Quote,
     QuotingAppointment,
     QuotingAppointmentSlot,
+    SocialAccount,
     SupplierEnquiry,
     SupplierMessage,
     SupplierProfile,
@@ -4023,3 +4024,320 @@ class ClearLinkedLoginTests(TestCase):
             reverse('clear_linked_login', args=[stranger.pk]), {'password': 'pass-a-12345'}, secure=True,
         )
         self.assertEqual(response.status_code, 403)
+
+
+# ── Google Sign-In ────────────────────────────────────────────────────────────
+# verify_oauth2_token is always mocked — these tests never call Google. The
+# patch target is marketplace.views.google_id_token.verify_oauth2_token,
+# matching the `from google.oauth2 import id_token as google_id_token` import
+# in views.py.
+
+def _google_claims(**overrides):
+    claims = {
+        'iss': 'accounts.google.com',
+        'aud': 'test-client-id',
+        'sub': 'google-sub-123',
+        'email': 'newgoogleuser@example.com',
+        'email_verified': True,
+        'given_name': 'Nai',
+        'family_name': 'Vono',
+        'name': 'Nai Vono',
+    }
+    claims.update(overrides)
+    return claims
+
+
+@override_settings(
+    GOOGLE_LOGIN_ENABLED=True,
+    GOOGLE_OAUTH_CLIENT_ID='test-client-id',
+    STORAGES={
+        'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
+        'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
+    },
+)
+class GoogleLoginTests(TestCase):
+    def setUp(self):
+        from django.core.cache import cache
+        cache.clear()
+
+    def _post_google_auth(self, **payload_overrides):
+        payload = {'credential': 'fake-credential'}
+        payload.update(payload_overrides)
+        return self.client.post(
+            reverse('google_auth'), data=json.dumps(payload), content_type='application/json', secure=True,
+        )
+
+    def _set_pending_signup(self, **overrides):
+        pending = {
+            'provider': 'google', 'uid': 'google-sub-456', 'email': 'pending@example.com',
+            'first_name': 'Pending', 'last_name': 'User',
+            'created_at': django_timezone.now().isoformat(),
+        }
+        pending.update(overrides)
+        session = self.client.session
+        session['pending_social_signup'] = pending
+        session.save()
+        return pending
+
+    # 1. Flag off
+    @override_settings(GOOGLE_LOGIN_ENABLED=False)
+    def test_flag_off_returns_404_and_hides_button(self):
+        response = self._post_google_auth()
+        self.assertEqual(response.status_code, 404)
+        login_page = self.client.get(reverse('login'), secure=True)
+        self.assertNotContains(login_page, 'g_id_signin')
+
+    def test_flag_on_shows_button_on_login_page(self):
+        login_page = self.client.get(reverse('login'), secure=True)
+        self.assertContains(login_page, 'g_id_signin')
+
+    # 2. New signup — held in session, no User created yet
+    @mock.patch('marketplace.views.google_id_token.verify_oauth2_token')
+    def test_new_signup_redirects_to_completion_step_without_creating_user(self, mock_verify):
+        mock_verify.return_value = _google_claims()
+        response = self._post_google_auth()
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertIn(reverse('google_signup_complete'), data['redirect'])
+        self.assertFalse(User.objects.filter(email='newgoogleuser@example.com').exists())
+        self.assertEqual(self.client.session['pending_social_signup']['uid'], 'google-sub-123')
+
+    # 3. Completion step creates the user, SocialAccount, TermsAcceptance,
+    #    client workspace, and the password is unusable.
+    def test_completion_step_creates_account_with_unusable_password(self):
+        from marketplace.models import TermsAcceptance
+        pending = self._set_pending_signup()
+        response = self.client.post(
+            reverse('google_signup_complete'),
+            {
+                'role': 'client', 'mobile': '+679 123 4567', 'town': 'Suva',
+                'date_of_birth': '1995-01-01', 'accepted_terms': 'on',
+            },
+            secure=True,
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertRedirects(response, reverse('client_dashboard'))
+        user = User.objects.get(email=pending['email'])
+        self.assertFalse(user.has_usable_password())
+        self.assertEqual(user.role, User.ROLE_CLIENT)
+        social = SocialAccount.objects.get(user=user)
+        self.assertEqual(social.provider, SocialAccount.PROVIDER_GOOGLE)
+        self.assertEqual(social.provider_uid, pending['uid'])
+        self.assertTrue(TermsAcceptance.objects.filter(user=user).exists())
+        self.assertTrue(UserCapability.objects.filter(user=user, can_hire=True).exists())
+        self.assertTrue(Workspace.objects.filter(owner=user, workspace_type=Workspace.TYPE_CLIENT).exists())
+        self.assertNotIn('pending_social_signup', self.client.session)
+
+    # 4. Existing SocialAccount logs straight in, no second User created
+    @mock.patch('marketplace.views.google_id_token.verify_oauth2_token')
+    def test_existing_social_account_logs_in_directly(self, mock_verify):
+        user = User.objects.create_user(
+            email='googleuser@example.com', password=None, first_name='Existing', last_name='User',
+            role=User.ROLE_CLIENT, town='Suva',
+        )
+        SocialAccount.objects.create(user=user, provider=SocialAccount.PROVIDER_GOOGLE, provider_uid='google-sub-123', email=user.email)
+        mock_verify.return_value = _google_claims(email=user.email)
+        response = self._post_google_auth()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['redirect'], reverse('dashboard'))
+        self.assertEqual(User.objects.filter(email=user.email).count(), 1)
+        self.assertEqual(int(self.client.session['_auth_user_id']), user.pk)
+
+    # 5. Existing password user with a verified matching email gets linked
+    @mock.patch('marketplace.views.google_id_token.verify_oauth2_token')
+    def test_existing_password_user_gets_linked(self, mock_verify):
+        user = User.objects.create_user(
+            email='haspassword@example.com', password='pass12345', first_name='Has', last_name='Password',
+            role=User.ROLE_CLIENT, town='Suva',
+        )
+        mock_verify.return_value = _google_claims(email=user.email)
+        response = self._post_google_auth()
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(SocialAccount.objects.filter(user=user, provider=SocialAccount.PROVIDER_GOOGLE).exists())
+        self.assertEqual(User.objects.filter(email=user.email).count(), 1)
+        self.client.logout()
+        self.assertTrue(self.client.login(username=user.email, password='pass12345'))
+
+    # 6. email_verified: false is rejected outright
+    @mock.patch('marketplace.views.google_id_token.verify_oauth2_token')
+    def test_unverified_email_is_rejected(self, mock_verify):
+        mock_verify.return_value = _google_claims(email_verified=False)
+        response = self._post_google_auth()
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('verify', response.json()['error'])
+        self.assertFalse(User.objects.filter(email='newgoogleuser@example.com').exists())
+
+    # 7. Email matches an is_staff user — refused, no link
+    @mock.patch('marketplace.views.google_id_token.verify_oauth2_token')
+    def test_staff_email_match_is_refused(self, mock_verify):
+        staff = User.objects.create_user(
+            email='staffer@example.com', password='pass12345', first_name='Staff', last_name='Person',
+            is_staff=True,
+        )
+        mock_verify.return_value = _google_claims(email=staff.email)
+        response = self._post_google_auth()
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(SocialAccount.objects.filter(user=staff).exists())
+        self.assertNotIn('_auth_user_id', self.client.session)
+
+    # 8. Wrong audience / expired token rejected
+    @mock.patch('marketplace.views.google_id_token.verify_oauth2_token')
+    def test_wrong_audience_is_rejected(self, mock_verify):
+        mock_verify.return_value = _google_claims(aud='someone-elses-client-id')
+        response = self._post_google_auth()
+        self.assertEqual(response.status_code, 400)
+
+    @mock.patch('marketplace.views.google_id_token.verify_oauth2_token')
+    def test_expired_token_is_rejected(self, mock_verify):
+        mock_verify.side_effect = ValueError('Token expired')
+        response = self._post_google_auth()
+        self.assertEqual(response.status_code, 400)
+
+    # 9. DOB under 16 rejected and locked out
+    def test_under_16_is_rejected_and_locked_out(self):
+        self._set_pending_signup()
+        under_16_dob = (django_timezone.now().date().replace(year=django_timezone.now().year - 15)).isoformat()
+        response = self.client.post(
+            reverse('google_signup_complete'),
+            {'role': 'client', 'mobile': '+679 123 4567', 'town': 'Suva', 'date_of_birth': under_16_dob, 'accepted_terms': 'on'},
+            secure=True,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'at least 16 years old')
+        self.assertFalse(User.objects.filter(email='pending@example.com').exists())
+        self._set_pending_signup()
+        retry = self.client.post(
+            reverse('google_signup_complete'),
+            {'role': 'client', 'mobile': '+679 123 4567', 'town': 'Suva', 'date_of_birth': '1995-01-01', 'accepted_terms': 'on'},
+            secure=True,
+        )
+        self.assertContains(retry, 'at least 16 years old')
+        self.assertFalse(User.objects.filter(email='pending@example.com').exists())
+
+    # 10. DOB 16-17 requires guardian consent
+    def test_minor_without_guardian_fields_is_rejected(self):
+        self._set_pending_signup()
+        minor_dob = (django_timezone.now().date().replace(year=django_timezone.now().year - 17)).isoformat()
+        response = self.client.post(
+            reverse('google_signup_complete'),
+            {'role': 'client', 'mobile': '+679 123 4567', 'town': 'Suva', 'date_of_birth': minor_dob, 'accepted_terms': 'on'},
+            secure=True,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(User.objects.filter(email='pending@example.com').exists())
+
+    def test_minor_with_guardian_fields_is_saved(self):
+        self._set_pending_signup()
+        minor_dob = (django_timezone.now().date().replace(year=django_timezone.now().year - 17)).isoformat()
+        response = self.client.post(
+            reverse('google_signup_complete'),
+            {
+                'role': 'client', 'mobile': '+679 123 4567', 'town': 'Suva', 'date_of_birth': minor_dob,
+                'guardian_name': 'Parent Person', 'guardian_contact': 'parent@example.com', 'guardian_consent': 'on',
+                'accepted_terms': 'on',
+            },
+            secure=True,
+        )
+        self.assertEqual(response.status_code, 302)
+        user = User.objects.get(email='pending@example.com')
+        self.assertIsNotNone(user.guardian_consent_at)
+        self.assertEqual(user.guardian_name, 'Parent Person')
+
+    # 11. Beta gate applies to the verified Google email
+    @override_settings(BETA_GATE_CLIENT_SIGNUPS=True, BETA_ALLOWED_EMAILS=set(), BETA_ALLOWED_DOMAINS=set())
+    def test_beta_gate_blocks_non_allowlisted_google_email(self):
+        self._set_pending_signup(email='not-invited@example.com')
+        response = self.client.post(
+            reverse('google_signup_complete'),
+            {'role': 'client', 'mobile': '+679 123 4567', 'town': 'Suva', 'date_of_birth': '1995-01-01', 'accepted_terms': 'on'},
+            secure=True,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'invite-only')
+        self.assertFalse(User.objects.filter(email='not-invited@example.com').exists())
+
+    # 12. Rate limiting
+    @mock.patch('marketplace.views.google_id_token.verify_oauth2_token')
+    def test_repeated_failures_are_rate_limited_then_cleared_on_success(self, mock_verify):
+        mock_verify.side_effect = ValueError('bad token')
+        for _ in range(10):
+            self._post_google_auth()
+        blocked = self._post_google_auth()
+        self.assertEqual(blocked.status_code, 429)
+
+        mock_verify.side_effect = None
+        mock_verify.return_value = _google_claims()
+        # Still blocked — the limit itself doesn't reset just because the
+        # next attempt would have succeeded.
+        still_blocked = self._post_google_auth()
+        self.assertEqual(still_blocked.status_code, 429)
+
+    # 13. next= to an external host is ignored
+    @mock.patch('marketplace.views.google_id_token.verify_oauth2_token')
+    def test_external_next_is_ignored(self, mock_verify):
+        user = User.objects.create_user(
+            email='nexttest@example.com', password=None, first_name='Next', last_name='Test',
+            role=User.ROLE_CLIENT, town='Suva',
+        )
+        SocialAccount.objects.create(user=user, provider=SocialAccount.PROVIDER_GOOGLE, provider_uid='google-sub-123', email=user.email)
+        mock_verify.return_value = _google_claims(email=user.email)
+        response = self._post_google_auth(next='https://evil.example.com/steal')
+        self.assertEqual(response.json()['redirect'], reverse('dashboard'))
+
+    # 14. Password login on a Google-only account
+    def test_password_login_on_google_only_account_shows_specific_message(self):
+        user = User.objects.create_user(
+            email='googleonly@example.com', password=None, first_name='Google', last_name='Only',
+            role=User.ROLE_CLIENT, town='Suva',
+        )
+        SocialAccount.objects.create(user=user, provider=SocialAccount.PROVIDER_GOOGLE, provider_uid='google-sub-789', email=user.email)
+        response = self.client.post(
+            reverse('login'), {'email': user.email, 'password': 'whatever'}, secure=True,
+        )
+        self.assertContains(response, 'uses Google sign-in')
+
+    def test_password_login_wrong_password_on_normal_account_is_generic(self):
+        User.objects.create_user(
+            email='normalpw@example.com', password='pass12345', first_name='Normal', last_name='User',
+            role=User.ROLE_CLIENT, town='Suva',
+        )
+        response = self.client.post(
+            reverse('login'), {'email': 'normalpw@example.com', 'password': 'wrong'}, secure=True,
+        )
+        self.assertContains(response, 'Incorrect email or password')
+        self.assertNotContains(response, 'uses Google sign-in')
+
+    # 15. Unlink refused with no other way in
+    def test_unlink_refused_with_no_usable_password_and_no_other_provider(self):
+        user = User.objects.create_user(
+            email='unlinktest@example.com', password=None, first_name='Unlink', last_name='Test',
+            role=User.ROLE_CLIENT, town='Suva',
+        )
+        SocialAccount.objects.create(user=user, provider=SocialAccount.PROVIDER_GOOGLE, provider_uid='google-sub-999', email=user.email)
+        self.client.force_login(user)
+        response = self.client.post(reverse('unlink_google_account'), secure=True)
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(SocialAccount.objects.filter(user=user, provider=SocialAccount.PROVIDER_GOOGLE).exists())
+
+    def test_unlink_succeeds_when_a_password_exists(self):
+        user = User.objects.create_user(
+            email='unlinkwithpw@example.com', password='pass12345', first_name='Unlink', last_name='WithPw',
+            role=User.ROLE_CLIENT, town='Suva',
+        )
+        SocialAccount.objects.create(user=user, provider=SocialAccount.PROVIDER_GOOGLE, provider_uid='google-sub-888', email=user.email)
+        self.client.force_login(user)
+        response = self.client.post(reverse('unlink_google_account'), secure=True)
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(SocialAccount.objects.filter(user=user, provider=SocialAccount.PROVIDER_GOOGLE).exists())
+
+    # Stale pending signup sends the user back to log in
+    def test_stale_pending_signup_redirects_to_login(self):
+        from datetime import timedelta
+        stale_created_at = (django_timezone.now() - timedelta(minutes=31)).isoformat()
+        self._set_pending_signup(created_at=stale_created_at)
+        response = self.client.get(reverse('google_signup_complete'), secure=True)
+        self.assertRedirects(response, reverse('login'))
+
+    def test_no_pending_signup_redirects_to_login(self):
+        response = self.client.get(reverse('google_signup_complete'), secure=True)
+        self.assertRedirects(response, reverse('login'))

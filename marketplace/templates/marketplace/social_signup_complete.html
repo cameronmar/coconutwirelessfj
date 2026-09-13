@@ -1,0 +1,110 @@
+{% extends "marketplace/base.html" %}
+{% block title %}Finish your sign up – The Coconut Wireless Network{% endblock %}
+
+{% block extra_css %}
+<style>
+main{display:flex;align-items:center;justify-content:center;padding:36px 20px;min-height:70vh;}
+.reg-wrap{width:100%;max-width:500px;}
+.reg-wrap h1{font-size:1.75rem;margin:0 0 4px;}
+.reg-wrap .sub{color:var(--muted);margin:0 0 22px;font-size:.92rem;}
+.email-band{background:var(--blue-light);border-radius:10px;padding:11px 14px;font-size:.87rem;color:var(--blue-dark);margin-bottom:18px;}
+.role-choice{display:block;border:1.5px solid #cce4ef;border-radius:12px;padding:12px 14px;margin-bottom:10px;cursor:pointer;}
+.role-choice:has(input:checked){border-color:var(--blue);background:var(--blue-light);}
+.role-choice input{margin-right:8px;accent-color:var(--blue);}
+.check-row{display:flex;align-items:flex-start;gap:10px;margin-bottom:18px;font-size:.87rem;color:var(--muted);line-height:1.5;}
+.check-row input{margin-top:2px;accent-color:var(--blue);}
+.check-row a{color:var(--blue);text-decoration:none;}
+</style>
+{% endblock %}
+
+{% block content %}
+<main>
+  <div class="reg-wrap">
+    <h1>Almost there</h1>
+    <p class="sub">Just a few more details to finish setting up your account.</p>
+    <div class="email-band">Signing up as <strong>{{ email }}</strong> via Google</div>
+
+    <div class="card">
+      <form method="post">
+        {% csrf_token %}
+        <div class="field">
+          <label>What brings you here?</label>
+          {% for choice in form.role %}
+          <label class="role-choice">{{ choice.tag }} {{ choice.choice_label }}</label>
+          {% endfor %}
+          {% for e in form.role.errors %}<div class="field-error">{{ e }}</div>{% endfor %}
+        </div>
+        <div class="row2">
+          <div class="field">
+            <label>Mobile</label>
+            {{ form.mobile }}
+            {% for e in form.mobile.errors %}<div class="field-error">{{ e }}</div>{% endfor %}
+          </div>
+          <div class="field">
+            <label>Town</label>
+            {{ form.town }}
+            {% for e in form.town.errors %}<div class="field-error">{{ e }}</div>{% endfor %}
+          </div>
+        </div>
+        <div class="field">
+          <label>Date of birth</label>
+          {{ form.date_of_birth }}
+          <div class="hint" style="font-size:.8rem;color:var(--muted);margin-top:4px;">{{ form.date_of_birth.help_text }}</div>
+          {% for e in form.date_of_birth.errors %}<div class="field-error">{{ e }}</div>{% endfor %}
+        </div>
+        <div id="guardianBlock" style="display:none;background:var(--blue-light);border-radius:10px;padding:14px 16px;margin-bottom:16px;">
+          <p style="margin:0 0 10px;font-size:.87rem;color:var(--text);font-weight:600;">Parent or guardian consent</p>
+          <p style="margin:0 0 12px;font-size:.85rem;color:var(--muted);">Because you're under 18, a parent or guardian must consent to you using the Coconut Wireless Network. Enter their details below — we may contact them to confirm.</p>
+          <div class="field">
+            <label>Parent/guardian full name</label>
+            {{ form.guardian_name }}
+            {% for e in form.guardian_name.errors %}<div class="field-error">{{ e }}</div>{% endfor %}
+          </div>
+          <div class="field">
+            <label>Parent/guardian phone or email</label>
+            {{ form.guardian_contact }}
+            {% for e in form.guardian_contact.errors %}<div class="field-error">{{ e }}</div>{% endfor %}
+          </div>
+          <div class="check-row" style="margin-bottom:0;">
+            {{ form.guardian_consent }}
+            <span>{{ form.guardian_consent.label }}</span>
+          </div>
+          {% for e in form.guardian_consent.errors %}<div class="field-error">{{ e }}</div>{% endfor %}
+        </div>
+        {% if form.non_field_errors %}
+          <div class="field-error" style="margin-bottom:12px;">{{ form.non_field_errors }}</div>
+        {% endif %}
+        <div class="check-row">
+          {{ form.accepted_terms }}
+          <span>I agree to the <a href="{% url 'terms' %}" target="_blank">Terms &amp; Conditions, Privacy Policy and Platform Rules</a></span>
+        </div>
+        {% for e in form.accepted_terms.errors %}<div class="field-error" style="margin-bottom:10px;">{{ e }}</div>{% endfor %}
+        <button type="submit" class="btn btn-primary" style="width:100%;padding:13px;">Finish creating my account</button>
+      </form>
+    </div>
+  </div>
+</main>
+
+<script>
+(function () {
+  var dobInput = document.getElementById('id_date_of_birth');
+  var guardianBlock = document.getElementById('guardianBlock');
+  if (!dobInput || !guardianBlock) return;
+  function updateGuardianVisibility() {
+    if (!dobInput.value) { guardianBlock.style.display = 'none'; return; }
+    var dob = new Date(dobInput.value);
+    if (isNaN(dob.getTime())) { guardianBlock.style.display = 'none'; return; }
+    var today = new Date();
+    var age = today.getFullYear() - dob.getFullYear();
+    if (today.getMonth() < dob.getMonth() || (today.getMonth() === dob.getMonth() && today.getDate() < dob.getDate())) age--;
+    guardianBlock.style.display = (age >= 16 && age < 18) ? 'block' : 'none';
+  }
+  dobInput.addEventListener('change', updateGuardianVisibility);
+  {% if form.guardian_name.errors or form.guardian_contact.errors or form.guardian_consent.errors %}
+  guardianBlock.style.display = 'block';
+  {% else %}
+  updateGuardianVisibility();
+  {% endif %}
+})();
+</script>
+{% endblock %}

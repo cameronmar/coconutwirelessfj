@@ -22,6 +22,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.template.loader import render_to_string
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.http import url_has_allowed_host_and_scheme
 
 from .constants import (
     MARKET_FOUNDING_CREDIT,
@@ -39,6 +40,7 @@ from .forms import (
     ContactSupportForm,
     ContentReportForm,
     DeleteAccountForm,
+    GoogleSignupCompleteForm,
     LoginForm,
     MergeAccountForm,
     MarketListingForm,
@@ -74,6 +76,7 @@ from .models import (
     QuotingAppointment,
     QuotingAppointmentSlot,
     ServiceSearch,
+    SocialAccount,
     Sponsor,
     UserBlock,
     SupplierEnquiry,
@@ -88,6 +91,8 @@ from .models import (
     User,
 )
 from . import workspaces
+from google.auth.transport import requests as google_requests
+from google.oauth2 import id_token as google_id_token
 from .utils import (
     calculate_market_price_per_unit,
     calculate_market_take_home,
@@ -341,6 +346,287 @@ def _age_gate_locked(request):
     return (timezone.now() - datetime.fromisoformat(failed_at)).total_seconds() < AGE_GATE_RETRY_LOCKOUT_SECONDS
 
 
+# ── Google Sign-In ────────────────────────────────────────────────────────────
+# Google Identity Services hands the browser a signed ID token (JWT); this
+# verifies it server-side with google-auth and never trusts anything else the
+# browser sends alongside it. Provider-generic model (SocialAccount) and a
+# JSON-in/JSON-out endpoint so the same plumbing serves the eventual Facebook
+# Login work and the Android app's native Google Sign-In unchanged.
+
+PENDING_SOCIAL_SIGNUP_TTL_SECONDS = 30 * 60
+
+
+def _google_audiences():
+    return [aud for aud in (settings.GOOGLE_OAUTH_CLIENT_ID, settings.GOOGLE_OAUTH_ANDROID_CLIENT_ID) if aud]
+
+
+def _google_nonce(request):
+    """Session-held, single-use-per-render nonce checked against the GIS
+    token's own nonce claim — closes a token-replay gap. Only touches the
+    session on the auth pages that actually render the button, not globally,
+    so turning the feature on doesn't hand every anonymous visitor a session
+    cookie on every page."""
+    if not settings.GOOGLE_LOGIN_ENABLED:
+        return ''
+    nonce = request.session.get('google_auth_nonce', '')
+    if not nonce:
+        import secrets
+        nonce = secrets.token_urlsafe(16)
+        request.session['google_auth_nonce'] = nonce
+    return nonce
+
+
+def _safe_google_redirect(request, next_url):
+    if next_url and url_has_allowed_host_and_scheme(
+        next_url, allowed_hosts={request.get_host()}, require_https=request.is_secure()
+    ):
+        return next_url
+    return reverse('dashboard')
+
+
+def _verify_google_credential(credential, expected_nonce):
+    """Raises ValueError (caught by the caller, logged to Sentry, never
+    surfaced to the user) on any failure: bad signature, expired token
+    (both from verify_oauth2_token itself), wrong issuer, wrong audience, or
+    a nonce that doesn't match this session's."""
+    claims = google_id_token.verify_oauth2_token(credential, google_requests.Request())
+    if claims.get('iss') not in ('accounts.google.com', 'https://accounts.google.com'):
+        raise ValueError(f"unexpected issuer: {claims.get('iss')!r}")
+    if claims.get('aud') not in _google_audiences():
+        raise ValueError(f"unexpected audience: {claims.get('aud')!r}")
+    if expected_nonce and claims.get('nonce') != expected_nonce:
+        raise ValueError('nonce mismatch')
+    return claims
+
+
+def _split_google_name(claims, email):
+    given_name = (claims.get('given_name') or '').strip()
+    family_name = (claims.get('family_name') or '').strip()
+    if not given_name and not family_name:
+        parts = (claims.get('name') or '').strip().split(' ', 1)
+        given_name = parts[0] if parts and parts[0] else ''
+        family_name = parts[1] if len(parts) > 1 else ''
+    if not given_name:
+        given_name = email.split('@', 1)[0]
+    return given_name, family_name
+
+
+def google_auth(request):
+    """POST /auth/google/ — receives the GIS ID token from the browser (or,
+    later, the Android app) and resolves it to a login, an account link, or
+    a hand-off to google_signup_complete. Returns JSON always, even on
+    failure, so the calling JS can show an inline error without a page
+    flash. 404s (not 403) when unlaunched, matching the FACEBOOK_LOGIN_ENABLED-
+    style flags elsewhere: an unlaunched feature should look like it doesn't
+    exist yet."""
+    if not settings.GOOGLE_LOGIN_ENABLED or not settings.GOOGLE_OAUTH_CLIENT_ID:
+        raise Http404
+    if request.user.is_authenticated:
+        return JsonResponse({'redirect': reverse('dashboard')})
+
+    from django.core.cache import cache
+    limit_key = f'ratelimit:google_auth:{_client_ip(request)}'
+    if cache.get(limit_key, 0) >= 10:
+        return JsonResponse({'error': 'Too many attempts. Please wait a few minutes and try again.'}, status=429)
+
+    import json
+    try:
+        payload = json.loads(request.body)
+    except (json.JSONDecodeError, ValueError):
+        return JsonResponse({'error': 'Invalid request.'}, status=400)
+
+    credential = (payload.get('credential') or '').strip()
+    next_url = payload.get('next') or ''
+    role_hint = payload.get('role') or ''
+    if not credential:
+        return JsonResponse({'error': 'Missing Google credential.'}, status=400)
+
+    def _record_failure():
+        try:
+            cache.incr(limit_key)
+        except ValueError:
+            cache.set(limit_key, 1, 900)
+
+    generic_error = JsonResponse({'error': "We couldn't sign you in with Google. Please try again."}, status=400)
+
+    expected_nonce = request.session.get('google_auth_nonce', '')
+    request.session.pop('google_auth_nonce', None)
+    try:
+        claims = _verify_google_credential(credential, expected_nonce)
+    except ValueError as exc:
+        try:
+            import sentry_sdk
+            sentry_sdk.capture_exception(exc)
+        except ImportError:
+            pass
+        _record_failure()
+        return generic_error
+
+    email = (claims.get('email') or '').lower()
+    if not email:
+        _record_failure()
+        return generic_error
+    if not claims.get('email_verified'):
+        # Never let an unverified email match an existing account — that's
+        # an account-takeover path, not just a UX nicety.
+        _record_failure()
+        return JsonResponse({'error': "We couldn't verify that Google account's email address."}, status=400)
+
+    sub = claims['sub']
+
+    # Outcome A: known SocialAccount — log straight in.
+    social = SocialAccount.objects.filter(
+        provider=SocialAccount.PROVIDER_GOOGLE, provider_uid=sub,
+    ).select_related('user').first()
+    if social:
+        user = social.user
+        if not user.is_active:
+            _record_failure()
+            return generic_error
+        login(request, user)
+        request.session.set_expiry(None)  # no "remember me" checkbox on the Google button
+        social.last_login_at = timezone.now()
+        social.save(update_fields=['last_login_at'])
+        cache.delete(limit_key)
+        flash.success(request, 'Signed in with Google.')
+        return JsonResponse({'redirect': _safe_google_redirect(request, next_url)})
+
+    # Outcome B: no SocialAccount, but a User exists with that email — link
+    # and log in, EXCEPT staff/superuser accounts, which must never be
+    # silently linkable (that would hand an attacker who registers a
+    # matching Google address the admin account outright). Staff can still
+    # link Google from account settings while already logged in.
+    existing_user = User.objects.filter(email=email).first()
+    if existing_user:
+        if existing_user.is_active and not existing_user.is_staff and not existing_user.is_superuser:
+            SocialAccount.objects.create(
+                user=existing_user, provider=SocialAccount.PROVIDER_GOOGLE,
+                provider_uid=sub, email=email, last_login_at=timezone.now(),
+            )
+            login(request, existing_user)
+            request.session.set_expiry(None)
+            cache.delete(limit_key)
+            flash.success(request, 'Signed in with Google. Your existing Coconut Wireless account is now linked.')
+            return JsonResponse({'redirect': _safe_google_redirect(request, next_url)})
+        _record_failure()
+        return JsonResponse({'error': 'Please sign in with your email and password.'}, status=400)
+
+    # Outcome C: no match at all — new signup. Don't create a User yet; hold
+    # the verified claims in session and hand off to the completion step.
+    given_name, family_name = _split_google_name(claims, email)
+    request.session['pending_social_signup'] = {
+        'provider': SocialAccount.PROVIDER_GOOGLE,
+        'uid': sub,
+        'email': email,
+        'first_name': given_name,
+        'last_name': family_name,
+        'created_at': timezone.now().isoformat(),
+    }
+    cache.delete(limit_key)
+    complete_url = reverse('google_signup_complete')
+    if role_hint in dict(GoogleSignupCompleteForm.ROLE_CHOICES):
+        complete_url = f'{complete_url}?role={role_hint}'
+    return JsonResponse({'redirect': complete_url})
+
+
+def google_signup_complete(request):
+    """GET/POST /auth/google/complete/ — collects what a brand-new Google
+    signup still needs (role, DOB/guardian consent, mobile, town, terms)
+    before the User row is actually created. Requires pending_social_signup
+    in session; a missing/expired one sends the user back to log in again
+    rather than rendering a form with nothing to complete."""
+    if not settings.GOOGLE_LOGIN_ENABLED or not settings.GOOGLE_OAUTH_CLIENT_ID:
+        raise Http404
+    if request.user.is_authenticated:
+        return redirect('dashboard')
+
+    pending = request.session.get('pending_social_signup')
+    stale = False
+    if pending:
+        created_at = datetime.fromisoformat(pending['created_at'])
+        stale = (timezone.now() - created_at).total_seconds() > PENDING_SOCIAL_SIGNUP_TTL_SECONDS
+    if not pending or stale:
+        request.session.pop('pending_social_signup', None)
+        flash.error(request, 'That took too long — please try signing in with Google again.')
+        return redirect('login')
+
+    email = pending['email']
+    supplier_enabled = settings.SUPPLIERS_ENABLED
+    role_param = request.GET.get('role', '')
+    initial_role = role_param if role_param in dict(GoogleSignupCompleteForm.ROLE_CHOICES) else GoogleSignupCompleteForm.ROLE_CLIENT
+    form_kwargs = dict(
+        supplier_enabled=supplier_enabled,
+        email=email,
+        # The account created here is always a Client account regardless of
+        # the role chosen below (tradie/supplier need document uploads a
+        # Google token can't supply) — so the Client beta gate is the one
+        # that applies, matching register_client.
+        beta_gate_enabled=settings.BETA_GATE_CLIENT_SIGNUPS,
+        initial={'role': initial_role},
+    )
+
+    if request.method == 'POST' and _age_gate_locked(request):
+        flash.error(request, 'You must be at least 16 years old to create an account. If you entered your date of birth incorrectly, contact us via the Support page.')
+        return render(request, 'marketplace/social_signup_complete.html', {
+            'form': GoogleSignupCompleteForm(**form_kwargs), 'email': email, 'town_choices': TOWN_CHOICES,
+        })
+
+    form = GoogleSignupCompleteForm(request.POST or None, **form_kwargs)
+    if request.method == 'POST' and form.is_valid():
+        cd = form.cleaned_data
+        with transaction.atomic():
+            user = User.objects.create_user(
+                email=email,
+                password=None,
+                first_name=pending.get('first_name') or '',
+                last_name=pending.get('last_name') or '',
+                mobile=cd['mobile'],
+                town=cd['town'],
+                role=User.ROLE_CLIENT,
+                date_of_birth=cd['date_of_birth'],
+            )
+            if user.is_minor:
+                user.guardian_name = cd.get('guardian_name', '').strip()
+                user.guardian_contact = cd.get('guardian_contact', '').strip()
+                user.guardian_consent_at = timezone.now()
+                user.guardian_consent_ip = request.META.get('REMOTE_ADDR')
+                user.save(update_fields=['guardian_name', 'guardian_contact', 'guardian_consent_at', 'guardian_consent_ip'])
+            workspaces.ensure_user_capability(user)
+            workspaces.create_client_workspace(user)
+            SocialAccount.objects.create(
+                user=user, provider=SocialAccount.PROVIDER_GOOGLE,
+                provider_uid=pending['uid'], email=email, last_login_at=timezone.now(),
+            )
+            settings_obj = PlatformSettings.get_active()
+            TermsAcceptance.objects.create(
+                user=user,
+                terms_version=settings_obj.terms_version if settings_obj else '1.0',
+                ip_address=request.META.get('REMOTE_ADDR'),
+                user_agent=request.META.get('HTTP_USER_AGENT', ''),
+            )
+        login(request, user)
+        request.session.set_expiry(None)
+        send_welcome_notice(user)
+        del request.session['pending_social_signup']
+
+        role = cd['role']
+        if role == GoogleSignupCompleteForm.ROLE_TRADIE:
+            flash.success(request, f'Bula, {user.first_name}! Your account is ready — next, set up your local professional profile.')
+            return redirect('add_role_tradie')
+        if role == GoogleSignupCompleteForm.ROLE_SUPPLIER:
+            flash.success(request, f'Bula, {user.first_name}! Your account is ready — next, set up your supplier profile.')
+            return redirect('add_role_supplier')
+        flash.success(request, f'Bula, {user.first_name}! Your account is ready.')
+        return redirect('client_dashboard')
+
+    if request.method == 'POST' and getattr(form, 'under_age_rejected', False):
+        request.session['age_gate_failed_at'] = timezone.now().isoformat()
+
+    return render(request, 'marketplace/social_signup_complete.html', {
+        'form': form, 'email': email, 'town_choices': TOWN_CHOICES,
+    })
+
+
 def register_client(request):
     if request.user.is_authenticated:
         return redirect('dashboard')
@@ -350,6 +636,7 @@ def register_client(request):
             'form': ClientRegistrationForm(),
             'closed_beta_enabled': settings.CLOSED_BETA_ENABLED,
             'beta_gate_clients': settings.BETA_GATE_CLIENT_SIGNUPS,
+            'google_nonce': _google_nonce(request),
         })
     form = ClientRegistrationForm(request.POST or None)
     if request.method == 'POST' and form.is_valid():
@@ -371,6 +658,7 @@ def register_client(request):
         'form': form,
         'closed_beta_enabled': settings.CLOSED_BETA_ENABLED,
         'beta_gate_clients': settings.BETA_GATE_CLIENT_SIGNUPS,
+        'google_nonce': _google_nonce(request),
     })
 
 
@@ -403,6 +691,7 @@ def register_tradie(request):
                 'town_choices': TOWN_CHOICES,
                 'closed_beta_enabled': settings.CLOSED_BETA_ENABLED,
                 'beta_gate_tradies': settings.BETA_GATE_TRADIE_SIGNUPS,
+                'google_nonce': _google_nonce(request),
             })
         settings_obj = PlatformSettings.get_active()
         TermsAcceptance.objects.create(
@@ -436,6 +725,7 @@ def register_tradie(request):
         'town_choices': TOWN_CHOICES,
         'closed_beta_enabled': settings.CLOSED_BETA_ENABLED,
         'beta_gate_tradies': settings.BETA_GATE_TRADIE_SIGNUPS,
+        'google_nonce': _google_nonce(request),
     })
 
 
@@ -454,7 +744,7 @@ def login_view(request):
         limit_key = f'ratelimit:login:{_client_ip(request)}'
         if cache.get(limit_key, 0) >= 10:
             flash.error(request, 'Too many failed login attempts. Please wait a few minutes and try again.')
-            return render(request, 'marketplace/login.html', {'form': form})
+            return render(request, 'marketplace/login.html', {'form': form, 'google_nonce': _google_nonce(request)})
         cd   = form.cleaned_data
         user = authenticate(request, username=cd['email'], password=cd['password'])
         if user:
@@ -474,8 +764,18 @@ def login_view(request):
                 cache.incr(limit_key)
             except ValueError:
                 cache.set(limit_key, 1, 900)
-            flash.error(request, 'Incorrect email or password.')
-    return render(request, 'marketplace/login.html', {'form': form})
+            # Fires only for an account that genuinely has no usable
+            # password AND has a Google login linked — never for a wrong
+            # password on a real password account, so this can't be used to
+            # enumerate which addresses are registered with passwords (it
+            # only ever confirms "this address signs in with Google", which
+            # is the specific thing we want to tell that person).
+            candidate = User.objects.filter(email=cd['email'].lower()).first()
+            if candidate and not candidate.has_usable_password() and candidate.social_accounts.filter(provider=SocialAccount.PROVIDER_GOOGLE).exists():
+                flash.error(request, 'This account uses Google sign-in — tap Continue with Google above.')
+            else:
+                flash.error(request, 'Incorrect email or password.')
+    return render(request, 'marketplace/login.html', {'form': form, 'google_nonce': _google_nonce(request)})
 
 
 def logout_view(request):
@@ -505,30 +805,53 @@ def password_reset_request(request):
         email = form.cleaned_data['email'].lower()
         user = User.objects.filter(email=email).first()
         if user and user.is_active:
-            from django.contrib.auth.tokens import default_token_generator
-            from django.utils.encoding import force_bytes
-            from django.utils.http import urlsafe_base64_encode
             from django.core.mail import send_mail
 
-            uidb64 = urlsafe_base64_encode(force_bytes(user.pk))
-            token = default_token_generator.make_token(user)
-            reset_url = request.build_absolute_uri(
-                reverse('password_reset_confirm', args=[uidb64, token])
-            )
-            send_mail(
-                subject='Reset your Coconut Wireless Network password',
-                message=(
-                    f'Bula {user.first_name},\n\n'
-                    f'Someone (hopefully you) requested a password reset for your account.\n\n'
-                    f'Reset your password here: {reset_url}\n\n'
-                    f"This link works once and expires after a while for your security. "
-                    f"If you didn't request this, you can safely ignore this email.\n\n"
-                    f'Vinaka,\nThe Coconut Wireless Network Team'
-                ),
-                from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@coconutwireless.fj'),
-                recipient_list=[user.email],
-                fail_silently=True,
-            )
+            # A Google-only account (no usable password) sends an
+            # informational email instead of a reset link — never a reset
+            # link, which would let this flow silently *add* a password to
+            # an account that deliberately has none. The outward HTTP
+            # response stays identical either way (see the flash below) so
+            # this can't be used to enumerate which addresses use Google.
+            if not user.has_usable_password() and user.social_accounts.filter(provider=SocialAccount.PROVIDER_GOOGLE).exists():
+                send_mail(
+                    subject='About your Coconut Wireless Network account',
+                    message=(
+                        f'Bula {user.first_name},\n\n'
+                        f'Someone (hopefully you) tried to reset the password for this email address, '
+                        f"but your Coconut Wireless Network account signs in with Google and doesn't have a "
+                        f'password. Use the "Continue with Google" button on the login page instead.\n\n'
+                        f"If you didn't request this, you can safely ignore this email.\n\n"
+                        f'Vinaka,\nThe Coconut Wireless Network Team'
+                    ),
+                    from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@coconutwireless.fj'),
+                    recipient_list=[user.email],
+                    fail_silently=True,
+                )
+            else:
+                from django.contrib.auth.tokens import default_token_generator
+                from django.utils.encoding import force_bytes
+                from django.utils.http import urlsafe_base64_encode
+
+                uidb64 = urlsafe_base64_encode(force_bytes(user.pk))
+                token = default_token_generator.make_token(user)
+                reset_url = request.build_absolute_uri(
+                    reverse('password_reset_confirm', args=[uidb64, token])
+                )
+                send_mail(
+                    subject='Reset your Coconut Wireless Network password',
+                    message=(
+                        f'Bula {user.first_name},\n\n'
+                        f'Someone (hopefully you) requested a password reset for your account.\n\n'
+                        f'Reset your password here: {reset_url}\n\n'
+                        f"This link works once and expires after a while for your security. "
+                        f"If you didn't request this, you can safely ignore this email.\n\n"
+                        f'Vinaka,\nThe Coconut Wireless Network Team'
+                    ),
+                    from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@coconutwireless.fj'),
+                    recipient_list=[user.email],
+                    fail_silently=True,
+                )
         flash.success(request, "If that email is registered, we've sent a password reset link to it.")
         return redirect('login')
     return render(request, 'marketplace/password_reset_request.html', {'form': form})
@@ -1591,9 +1914,77 @@ def delete_account(request):
 
 @login_required
 def account_linking_hub(request):
+    other_social_exists = SocialAccount.objects.filter(user=request.user).exclude(provider=SocialAccount.PROVIDER_GOOGLE).exists()
     return render(request, 'marketplace/account_linking_hub.html', {
         'held_roles': workspaces.get_own_available_roles(request.user),
+        'google_account': request.user.social_accounts.filter(provider=SocialAccount.PROVIDER_GOOGLE).first(),
+        'google_login_can_link': settings.GOOGLE_LOGIN_ENABLED and bool(settings.GOOGLE_OAUTH_CLIENT_ID),
+        'google_nonce': _google_nonce(request),
+        'can_unlink_google': request.user.has_usable_password() or other_social_exists,
     })
+
+
+@login_required
+@require_POST
+def link_google_account(request):
+    """POST /account/link/google/link/ — links Google to the CURRENT
+    session's account. Requires a fresh verified token even though the user
+    is already authenticated — this is deliberately the only way a staff
+    account can gain a SocialAccount, since google_auth refuses to
+    silently link staff/superuser accounts (see its outcome B)."""
+    if not settings.GOOGLE_LOGIN_ENABLED or not settings.GOOGLE_OAUTH_CLIENT_ID:
+        raise Http404
+    import json
+    try:
+        payload = json.loads(request.body)
+    except (json.JSONDecodeError, ValueError):
+        return JsonResponse({'error': 'Invalid request.'}, status=400)
+
+    credential = (payload.get('credential') or '').strip()
+    if not credential:
+        return JsonResponse({'error': 'Missing Google credential.'}, status=400)
+
+    expected_nonce = request.session.get('google_auth_nonce', '')
+    request.session.pop('google_auth_nonce', None)
+    try:
+        claims = _verify_google_credential(credential, expected_nonce)
+    except ValueError as exc:
+        try:
+            import sentry_sdk
+            sentry_sdk.capture_exception(exc)
+        except ImportError:
+            pass
+        return JsonResponse({'error': "We couldn't verify that Google account. Please try again."}, status=400)
+
+    if not claims.get('email_verified'):
+        return JsonResponse({'error': "We couldn't verify that Google account's email address."}, status=400)
+
+    sub = claims['sub']
+    if SocialAccount.objects.filter(provider=SocialAccount.PROVIDER_GOOGLE, provider_uid=sub).exclude(user=request.user).exists():
+        return JsonResponse({'error': 'That Google account is already linked to a different Coconut Wireless account.'}, status=400)
+
+    SocialAccount.objects.update_or_create(
+        provider=SocialAccount.PROVIDER_GOOGLE, user=request.user,
+        defaults={'provider_uid': sub, 'email': (claims.get('email') or '').lower(), 'last_login_at': timezone.now()},
+    )
+    flash.success(request, 'Your Google account is now linked.')
+    return JsonResponse({'redirect': reverse('account_linking_hub')})
+
+
+@login_required
+@require_POST
+def unlink_google_account(request):
+    social = SocialAccount.objects.filter(user=request.user, provider=SocialAccount.PROVIDER_GOOGLE).first()
+    if not social:
+        flash.error(request, 'No Google account is linked.')
+        return redirect('account_linking_hub')
+    other_social_exists = SocialAccount.objects.filter(user=request.user).exclude(pk=social.pk).exists()
+    if not request.user.has_usable_password() and not other_social_exists:
+        flash.error(request, 'Set a password first — unlinking Google would leave you with no way to log in.')
+        return redirect('account_linking_hub')
+    social.delete()
+    flash.success(request, 'Your Google account has been unlinked.')
+    return redirect('account_linking_hub')
 
 
 @login_required
@@ -2285,6 +2676,7 @@ def register_supplier(request):
         'form': form,
         'supply_choices': supply_choices,
         'town_choices': TOWN_CHOICES,
+        'google_nonce': _google_nonce(request),
     })
 
 
