@@ -364,6 +364,81 @@ class ChangePasswordForm(forms.Form):
         return cd
 
 
+class GoogleSignupCompleteForm(forms.Form):
+    """Completes a brand-new signup after a verified Google token had no
+    matching User/SocialAccount (views.google_signup_complete). Every Google
+    signup becomes a Client account first — tradie/supplier registration
+    needs document uploads a Google token can't supply — so this only
+    collects what a Client account needs (mirrors ClientRegistrationForm's
+    age-gate/guardian-consent fields) plus a role choice that, for
+    Local professional/Supplier, routes into add_role_tradie/add_role_supplier
+    right after this account is created. Email is intentionally not a field
+    here — it comes from the verified token claims held in the session, never
+    from POST data."""
+    ROLE_CLIENT   = 'client'
+    ROLE_TRADIE   = 'tradie'
+    ROLE_SUPPLIER = 'supplier'
+    ROLE_CHOICES  = [
+        (ROLE_CLIENT,   'Client — I need to hire someone'),
+        (ROLE_TRADIE,   "Local professional — I'm looking for work"),
+        (ROLE_SUPPLIER, 'Supplier — I supply goods or materials'),
+    ]
+
+    role = forms.ChoiceField(choices=ROLE_CHOICES, widget=forms.RadioSelect, initial=ROLE_CLIENT)
+    mobile = forms.CharField(max_length=20, widget=_input('+679 123 4567'))
+    town = forms.ChoiceField(choices=[('', 'Select town…')] + list(TOWN_CHOICES), widget=_select())
+    date_of_birth = forms.DateField(
+        label='Date of birth',
+        widget=forms.DateInput(attrs={'class': 'form-input', 'type': 'date'}),
+        help_text='You must be at least 16 to use the Coconut Wireless Network.',
+    )
+    guardian_name    = forms.CharField(max_length=120, required=False, label='Parent/guardian full name', widget=_input('Required if you are under 18'))
+    guardian_contact = forms.CharField(max_length=120, required=False, label='Parent/guardian phone or email', widget=_input('Required if you are under 18'))
+    guardian_consent = forms.BooleanField(
+        required=False,
+        label='I confirm my parent or guardian consents to me using this platform and to the collection of my '
+              'information as described in the Privacy Policy.',
+    )
+    accepted_terms = forms.BooleanField(
+        required=True,
+        error_messages={'required': 'You must accept the Terms & Conditions, Privacy Policy and Platform Rules to register.'}
+    )
+
+    def __init__(self, *args, supplier_enabled=True, email=None, beta_gate_enabled=False, **kwargs):
+        self.supplier_enabled = supplier_enabled
+        self.email = email
+        self.beta_gate_enabled = beta_gate_enabled
+        super().__init__(*args, **kwargs)
+        self.fields['date_of_birth'].widget.attrs['max'] = date.today().isoformat()
+        if not supplier_enabled:
+            self.fields['role'].choices = [c for c in self.ROLE_CHOICES if c[0] != self.ROLE_SUPPLIER]
+
+    def clean_role(self):
+        role = self.cleaned_data['role']
+        if role == self.ROLE_SUPPLIER and not self.supplier_enabled:
+            raise ValidationError('Supplier signups are not available right now.')
+        return role
+
+    def clean(self):
+        cd = super().clean()
+        if self.beta_gate_enabled and self.email:
+            _validate_closed_beta_email(self.email, True)
+        dob = cd.get('date_of_birth')
+        if dob:
+            age = _age_from_dob(dob)
+            if age < User.MINOR_AGE_FLOOR:
+                self.under_age_rejected = True
+                raise ValidationError('You must be at least 16 years old to create an account. If you entered your date of birth incorrectly, contact us via the Support page.')
+            if age < User.AGE_OF_MAJORITY:
+                if not cd.get('guardian_consent'):
+                    self.add_error('guardian_consent', 'Parent or guardian consent is required for users under 18.')
+                if not (cd.get('guardian_name') or '').strip():
+                    self.add_error('guardian_name', 'Required for users under 18.')
+                if not (cd.get('guardian_contact') or '').strip():
+                    self.add_error('guardian_contact', 'Required for users under 18.')
+        return cd
+
+
 # ── Task form ─────────────────────────────────────────────────────────────────
 
 DATE_TYPE_CHOICES = [
@@ -1109,6 +1184,14 @@ class AddTradieRoleForm(forms.Form):
             self.reused_tin_letter = False
         if self.reused_tin_letter:
             self.fields['tin_letter'].help_text = "We'll reuse the TIN letter already on file for your supplier account, or upload a new one."
+        # Google-only accounts (SocialAccount, no usable password) have
+        # nothing to re-enter here — a fresh verified Google token already
+        # proved identity for this session, same reasoning as staff linking
+        # Google from account settings requiring a live session.
+        if user and not user.has_usable_password():
+            self.fields['password'].required = False
+            self.fields['password'].label = 'Password'
+            self.fields['password'].help_text = "Not needed — you're signed in with Google."
 
     def clean_email(self):
         email = self.cleaned_data['email'].lower()
@@ -1117,7 +1200,9 @@ class AddTradieRoleForm(forms.Form):
         return email
 
     def clean_password(self):
-        password = self.cleaned_data['password']
+        password = self.cleaned_data.get('password', '')
+        if self.user and not self.user.has_usable_password():
+            return password
         if not self.user or not self.user.check_password(password):
             raise ValidationError('Incorrect password.')
         return password
@@ -1216,6 +1301,10 @@ class AddSupplierRoleForm(forms.Form):
             self.reused_tin_letter = False
         if self.reused_tin_letter:
             self.fields['tin_letter'].help_text = "We'll reuse the TIN letter already on file for your local pro account, or upload a new one."
+        if user and not user.has_usable_password():
+            self.fields['password'].required = False
+            self.fields['password'].label = 'Password'
+            self.fields['password'].help_text = "Not needed — you're signed in with Google."
 
     def clean_email(self):
         email = self.cleaned_data['email'].lower()
@@ -1224,7 +1313,9 @@ class AddSupplierRoleForm(forms.Form):
         return email
 
     def clean_password(self):
-        password = self.cleaned_data['password']
+        password = self.cleaned_data.get('password', '')
+        if self.user and not self.user.has_usable_password():
+            return password
         if not self.user or not self.user.check_password(password):
             raise ValidationError('Incorrect password.')
         return password

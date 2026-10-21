@@ -141,6 +141,7 @@ main{display:flex;align-items:center;justify-content:center;padding:36px 20px;mi
         {% for e in form.accepted_terms.errors %}<div class="field-error" style="margin-bottom:10px;">{{ e }}</div>{% endfor %}
         <button type="submit" class="btn btn-primary" style="width:100%;padding:13px;">Create account</button>
       </form>
+      {% include "marketplace/_google_signin.html" with role_hint="client" %}
     </div>
   </div>
 </main>

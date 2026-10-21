@@ -4,6 +4,7 @@ dj-database-url==3.1.2
 Django==5.0.14
 boto3==1.43.42
 django-storages==1.14.6
+google-auth==2.56.3
 gunicorn==26.0.0
 pillow==12.2.0
 psycopg2-binary==2.9.10
