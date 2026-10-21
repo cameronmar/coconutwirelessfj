@@ -4116,7 +4116,7 @@ class GoogleLoginTests(TestCase):
             secure=True,
         )
         self.assertEqual(response.status_code, 302)
-        self.assertRedirects(response, reverse('client_dashboard'))
+        self.assertRedirects(response, reverse('client_dashboard'), fetch_redirect_response=False)
         user = User.objects.get(email=pending['email'])
         self.assertFalse(user.has_usable_password())
         self.assertEqual(user.role, User.ROLE_CLIENT)
@@ -4336,8 +4336,8 @@ class GoogleLoginTests(TestCase):
         stale_created_at = (django_timezone.now() - timedelta(minutes=31)).isoformat()
         self._set_pending_signup(created_at=stale_created_at)
         response = self.client.get(reverse('google_signup_complete'), secure=True)
-        self.assertRedirects(response, reverse('login'))
+        self.assertRedirects(response, reverse('login'), fetch_redirect_response=False)
 
     def test_no_pending_signup_redirects_to_login(self):
         response = self.client.get(reverse('google_signup_complete'), secure=True)
-        self.assertRedirects(response, reverse('login'))
+        self.assertRedirects(response, reverse('login'), fetch_redirect_response=False)
