@@ -33,6 +33,7 @@ from .models import (
     QuotingAppointment,
     QuotingAppointmentSlot,
     ServiceSearch,
+    SocialAccount,
     Sponsor,
     SupplyCategory,
     SupplierProfile,
@@ -91,6 +92,26 @@ class HasAcceptedTermsFilter(admin.SimpleListFilter):
         return queryset
 
 
+class SocialAccountInline(admin.TabularInline):
+    """Read-only — support can see how an account signs in, but linking/
+    unlinking only ever happens through the real flows (views.google_auth,
+    views.link_google_account/unlink_google_account), which enforce the
+    uniqueness and staff-exclusion rules a plain admin edit would bypass."""
+    model = SocialAccount
+    extra = 0
+    fields = ['provider', 'provider_uid', 'email', 'linked_at', 'last_login_at']
+    readonly_fields = fields
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+
 @admin.register(User)
 class UserAdmin(BaseUserAdmin):
     ordering = ['email']
@@ -99,6 +120,7 @@ class UserAdmin(BaseUserAdmin):
     search_fields = ['email', 'first_name', 'last_name']
     actions = ['grant_tester_access', 'revoke_tester_access']
     readonly_fields = ['account_deleted_at']
+    inlines = [SocialAccountInline]
     fieldsets = (
         (None,           {'fields': ('email', 'password')}),
         ('Personal',     {'fields': ('first_name', 'last_name', 'mobile', 'town', 'role')}),

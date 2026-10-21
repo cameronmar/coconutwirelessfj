@@ -32,5 +32,55 @@
     <h2>Manage linked logins</h2>
     <p>See which accounts are linked, and disable a login you no longer want to use.</p>
   </a>
+
+  <div class="choice-card" style="cursor:default;">
+    <h2>Connected accounts</h2>
+    {% if google_account %}
+      <p>✅ Google — linked ({{ google_account.email }})</p>
+      {% if can_unlink_google %}
+      <form method="post" action="{% url 'unlink_google_account' %}" onsubmit="return confirm('Unlink your Google account? You will need another way to log in.');" style="margin-top:8px;">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-outline" style="padding:8px 16px;font-size:.85rem;">Unlink Google</button>
+      </form>
+      {% else %}
+      <p style="font-size:.82rem;color:var(--muted);margin-top:6px;">Set a password first — unlinking now would leave you with no way to log in.</p>
+      {% endif %}
+    {% elif google_login_can_link %}
+      <p style="margin-bottom:10px;">Google — not linked</p>
+      <div id="googleSignInError" class="field-error" style="display:none;margin-bottom:10px;"></div>
+      <div id="g_id_onload"
+           data-client_id="{{ google_client_id }}"
+           data-nonce="{{ google_nonce }}"
+           data-callback="handleGoogleLinkCredential"
+           data-auto_prompt="false"></div>
+      <div class="g_id_signin" data-type="standard" data-shape="pill" data-theme="outline" data-text="continue_with" data-size="large" data-logo_alignment="left"></div>
+      <script src="https://accounts.google.com/gsi/client" async defer></script>
+      <script>
+      (function () {
+        function getCsrfToken() {
+          var m = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
+          return m ? m[1] : '';
+        }
+        window.handleGoogleLinkCredential = function (response) {
+          fetch("{% url 'link_google_account' %}", {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCsrfToken() },
+            body: JSON.stringify({ credential: response.credential }),
+          })
+            .then(function (r) { return r.json(); })
+            .then(function (d) {
+              if (d.redirect) { window.location = d.redirect; }
+              else if (d.error) {
+                var el = document.getElementById('googleSignInError');
+                if (el) { el.textContent = d.error; el.style.display = 'block'; }
+              }
+            });
+        };
+      })();
+      </script>
+    {% else %}
+      <p style="font-size:.87rem;color:var(--muted);">Google sign-in isn't available right now.</p>
+    {% endif %}
+  </div>
 </div>
 {% endblock %}
