@@ -41,6 +41,7 @@ urlpatterns = [
     path('dashboard/client/',      views.client_dashboard, name='client_dashboard'),
     path('dashboard/tradie/',      views.tradie_dashboard, name='tradie_dashboard'),
     path('dashboard/tradie/service-area/', views.edit_service_area, name='edit_service_area'),
+    path('dashboard/tradie/services/',     views.edit_trades,       name='edit_trades'),
     path('billing/',               views.billing,          name='billing'),
     # Tasks
     path('tasks/',                 views.browse_tasks,  name='browse_tasks'),
@@ -82,6 +83,7 @@ urlpatterns = [
     path('enquiries/messages/<int:pk>/edit/',           views.edit_supplier_message,      name='edit_supplier_message'),
     path('enquiries/messages/<int:pk>/delete/',         views.delete_supplier_message,    name='delete_supplier_message'),
     path('dashboard/supplier/',                         views.supplier_dashboard,         name='supplier_dashboard'),
+    path('dashboard/supplier/categories/',              views.edit_supply_categories,     name='edit_supply_categories'),
     # Messages
     path('messages/',                        views.inbox,        name='inbox'),
     path('messages/<int:tpk>/<int:opk>/',    views.conversation, name='conversation'),

@@ -57,8 +57,10 @@ from .forms import (
     SupplierEnquiryForm,
     SupplierQuoteResponseForm,
     SupplierRegistrationForm,
+    SupplyCategoriesForm,
     TaskDateForm,
     TaskForm,
+    TradesForm,
     TradieRegistrationForm,
 )
 from .models import (
@@ -987,6 +989,30 @@ def edit_service_area(request):
     return render(request, 'marketplace/edit_service_area.html', {
         'form': form,
         'town_choices': TOWN_CHOICES,
+    })
+
+
+@login_required
+def edit_trades(request):
+    _require_role(request, User.ROLE_TRADIE)
+    profile = _get_tradie_profile(request.user)
+    if not profile:
+        flash.warning(request, 'Your local professional profile could not be found. Please contact support.')
+        return redirect('tradie_dashboard')
+
+    form = TradesForm(request.POST or None, instance=profile)
+    if request.method == 'POST' and form.is_valid():
+        form.save()
+        flash.success(request, 'Your services have been updated.')
+        return redirect('tradie_dashboard')
+    return render(request, 'marketplace/edit_categories.html', {
+        'form': form,
+        'field': form['trades'],
+        'choices': TradeCategory.get_choices(),
+        'page_title': 'My services',
+        'page_sub': 'Select every service you offer. Jobs posted in these categories show up on your dashboard.',
+        'save_label': 'Save services',
+        'back_url': 'tradie_dashboard',
     })
 
 
@@ -2706,6 +2732,33 @@ def supplier_dashboard(request):
         'closed_enquiries': closed,
         'total_enquiries': enquiries.count(),
         'role_tabs': workspaces.get_role_tabs(request.user),
+    })
+
+
+@beta_feature('SUPPLIERS_ENABLED')
+@login_required
+def edit_supply_categories(request):
+    if request.user.role != User.ROLE_SUPPLIER:
+        return redirect('dashboard')
+    try:
+        profile = request.user.supplier_profile
+    except SupplierProfile.DoesNotExist:
+        flash.warning(request, 'Your supplier profile could not be found. Please contact support.')
+        return redirect('home')
+
+    form = SupplyCategoriesForm(request.POST or None, instance=profile)
+    if request.method == 'POST' and form.is_valid():
+        form.save()
+        flash.success(request, 'Your supply categories have been updated.')
+        return redirect('supplier_dashboard')
+    return render(request, 'marketplace/edit_categories.html', {
+        'form': form,
+        'field': form['supply_categories'],
+        'choices': SupplyCategory.get_choices(),
+        'page_title': 'My categories',
+        'page_sub': 'Select every category you supply. Clients browsing suppliers by category will find you under these.',
+        'save_label': 'Save categories',
+        'back_url': 'supplier_dashboard',
     })
 
 
