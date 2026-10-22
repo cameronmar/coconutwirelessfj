@@ -39,6 +39,7 @@
     <h1>Join as a Local Professional</h1>
     <p class="sub">Looking to hire? <a href="{% url 'register_client' %}">Sign up as a client</a> &nbsp;|&nbsp; Already have an account? <a href="{% url 'login' %}">Log in</a></p>
     <div class="info-band">✅ Free to join · Get notified of jobs near you · Only pay when you win work</div>
+    {% if suppliers_visible %}{% include "marketplace/_account_type_help.html" with collapsed=True current="tradie" %}{% endif %}
     {% if closed_beta_enabled and beta_gate_tradies %}
     <div class="info-band" style="background:#fffaf0;color:#7a4f00;border:1px solid #ffe2a8;">
       Closed beta access is invite-only. Use your approved email to register as a local professional.

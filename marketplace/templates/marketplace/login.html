@@ -37,6 +37,7 @@ main{flex:1;display:flex;align-items:center;justify-content:center;padding:40px 
       <button class="role-tab" disabled title="Coming soon">📦 Supplier (soon)</button>
       {% endif %}
     </div>
+    <p class="sub" id="roleHint" style="margin-top:-12px;">You post jobs and hire local professionals.</p>
 
     <div class="card">
       <form method="post" action="{% url 'login' %}{% if request.GET.next %}?next={{ request.GET.next }}{% endif %}">
@@ -74,12 +75,18 @@ main{flex:1;display:flex;align-items:center;justify-content:center;padding:40px 
 let role='client';
 const roleLabels = {client: 'Client', tradie: 'Local Professional', supplier: 'Supplier'};
 const roleTabIds = {client: 'tabClient', tradie: 'tabTradie', supplier: 'tabSupplier'};
+const roleHints = {
+  client: 'You post jobs and hire local professionals.',
+  tradie: 'You provide goods and services.',
+  supplier: 'You only sell goods.',
+};
 function setRole(r){
   role=r;
   document.querySelectorAll('.role-tab').forEach(t=>t.classList.remove('active'));
   const tab = document.getElementById(roleTabIds[r]);
   if (tab) tab.classList.add('active');
   document.getElementById('loginBtn').textContent='Log in as '+roleLabels[r];
+  document.getElementById('roleHint').textContent=roleHints[r];
 }
 </script>
 {% endblock %}

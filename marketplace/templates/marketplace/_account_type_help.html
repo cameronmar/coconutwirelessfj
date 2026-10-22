@@ -1,0 +1,41 @@
+{% comment %}
+"Local Professional or Supplier?" explainer, shown on the sign-up pages so
+people pick the right side. Pass collapsed=True to render it as a
+click-to-open hint (used on the role-specific sign-up pages); current="tradie"
+or "supplier" highlights the page the visitor is already on and links to the
+other one.
+{% endcomment %}
+<style>
+.acct-help{background:var(--white);border:1.5px solid #cce4ef;border-radius:14px;padding:14px 16px;margin-bottom:18px;font-size:.86rem;line-height:1.5;}
+.acct-help summary{cursor:pointer;font-weight:600;color:var(--blue);list-style:none;}
+.acct-help summary::-webkit-details-marker{display:none;}
+.acct-help summary::before{content:'❓ ';}
+.acct-help h3{font-size:.95rem;margin:0 0 10px;}
+.acct-help-cols{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:10px;}
+.acct-help-col{border-radius:10px;padding:10px 12px;background:#f7fcff;}
+.acct-help-col.here{outline:2px solid var(--blue);}
+.acct-help-col h4{margin:0 0 4px;font-size:.9rem;}
+.acct-help-col p{margin:0 0 6px;color:var(--muted);}
+.acct-help-col a{color:var(--blue);font-weight:600;text-decoration:none;}
+.acct-help-both{margin:10px 0 0;color:var(--muted);}
+@media (max-width:520px){.acct-help-cols{grid-template-columns:1fr;}}
+</style>
+
+{% if collapsed %}<details class="acct-help"><summary>Not sure if you're a Local Professional or a Supplier?</summary>
+{% else %}<div class="acct-help"><h3>Local Professional or Supplier?</h3>{% endif %}
+  <div class="acct-help-cols">
+    <div class="acct-help-col{% if current == 'tradie' %} here{% endif %}">
+      <h4>🔧 Local Professional</h4>
+      <p><strong>I provide goods and services.</strong> Customers hire you to do a job. You get job posts near you, send quotes and get paid for your work.</p>
+      <p>e.g. plumbing, building, cleaning, cabinetry, graphic design, t-shirt &amp; banner printing</p>
+      {% if current == 'tradie' %}<span>✅ You're on this sign up</span>{% else %}<a href="{% url 'register_tradie' %}">Join as a Local Professional →</a>{% endif %}
+    </div>
+    <div class="acct-help-col{% if current == 'supplier' %} here{% endif %}">
+      <h4>📦 Supplier</h4>
+      <p><strong>I only sell goods.</strong> Customers buy products or materials from you, with no job or service involved. You get product enquiries and send itemised quotes.</p>
+      <p>e.g. timber &amp; hardware, building materials, plumbing &amp; electrical supplies, food &amp; beverage</p>
+      {% if current == 'supplier' %}<span>✅ You're on this sign up</span>{% elif suppliers_visible %}<a href="{% url 'register_supplier' %}">Register as a Supplier →</a>{% else %}<span>Coming soon</span>{% endif %}
+    </div>
+  </div>
+  <p class="acct-help-both"><strong>Sell goods and also do the work?</strong> For example, you sell timber and also build. Choose Local Professional.</p>
+{% if collapsed %}</details>{% else %}</div>{% endif %}
