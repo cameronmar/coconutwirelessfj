@@ -27,6 +27,7 @@ from .models import (
     Message,
     PlatformCircumventionCase,
     PlatformFee,
+    PlatformNotice,
     PlatformSettings,
     PromoCode,
     PublicReview,
@@ -1873,6 +1874,73 @@ class MigrateToTradieAdminValidationTests(TestCase):
         self.assertEqual(response.status_code, 403)
         self.client_user.refresh_from_db()
         self.assertEqual(self.client_user.role, User.ROLE_CLIENT)
+
+
+class MigrateSupplierToTradieAdminTests(TestCase):
+    def setUp(self):
+        from . import workspaces
+        self.admin_user = User.objects.create_superuser(email='supmigsuper@example.com', password='pass12345')
+        self.supplier_user = User.objects.create_user(
+            email='move-supplier@example.com', password='pass12345',
+            first_name='Sione', last_name='Supplier', role=User.ROLE_SUPPLIER, town='Nadi',
+        )
+        self.supplier = SupplierProfile.objects.create(
+            user=self.supplier_user, business_name='Sione Timber', bio='Timber and fixings',
+            tin='TIN-123', supply_categories=['timber'], service_towns=['Nadi', 'Lautoka'],
+            verification_status=SupplierProfile.VERIFICATION_APPROVED,
+        )
+        workspaces.create_supplier_workspace(self.supplier_user)
+        self.url = reverse('admin:marketplace_user_migrate_to_tradie', args=[self.supplier_user.pk])
+        self.client.login(username=self.admin_user.email, password='pass12345')
+
+    def _post(self, **extra):
+        data = {'trades': ['cleaning'], 'service_towns': ['Nadi'], 'business_name': 'Sione Builds'}
+        data.update(extra)
+        return self.client.post(self.url, data, secure=True)
+
+    def test_migrate_link_shown_for_supplier(self):
+        from . import admin as marketplace_admin
+        model_admin = marketplace_admin.UserAdmin(User, marketplace_admin.admin.site)
+        self.assertIn(self.url, model_admin.migrate_link(self.supplier_user))
+
+    def test_move_and_take_off_supplier_side(self):
+        from . import workspaces
+        response = self._post(remove_supplier_side='on')
+        self.assertEqual(response.status_code, 302)
+        self.supplier_user.refresh_from_db()
+        self.assertEqual(self.supplier_user.role, User.ROLE_TRADIE)
+        tradie = self.supplier_user.tradie_profile
+        self.assertEqual(tradie.business_name, 'Sione Builds')
+        self.assertEqual(tradie.bio, 'Timber and fixings')
+        self.assertEqual(tradie.tin, 'TIN-123')
+        self.assertEqual(tradie.verification_status, TradieProfile.VERIFICATION_PENDING)
+
+        self.supplier.refresh_from_db()
+        self.assertEqual(self.supplier.verification_status, SupplierProfile.VERIFICATION_MOVED)
+        self.assertFalse(self.supplier.can_receive_enquiries())
+        self.assertFalse(Workspace.objects.get(owner=self.supplier_user, workspace_type=Workspace.TYPE_SUPPLIER).active)
+        self.assertNotIn(User.ROLE_SUPPLIER, workspaces.get_own_available_roles(self.supplier_user))
+        self.assertIn(User.ROLE_TRADIE, workspaces.get_own_available_roles(self.supplier_user))
+
+    def test_move_and_keep_supplier_side(self):
+        from . import workspaces
+        response = self._post()  # checkbox unticked → not submitted
+        self.assertEqual(response.status_code, 302)
+        self.supplier.refresh_from_db()
+        self.assertEqual(self.supplier.verification_status, SupplierProfile.VERIFICATION_APPROVED)
+        self.assertTrue(Workspace.objects.get(owner=self.supplier_user, workspace_type=Workspace.TYPE_SUPPLIER).active)
+        self.supplier_user.refresh_from_db()
+        roles = workspaces.get_own_available_roles(self.supplier_user)
+        self.assertIn(User.ROLE_SUPPLIER, roles)
+        self.assertIn(User.ROLE_TRADIE, roles)
+
+    def test_supplier_email_mentions_supplier(self):
+        self._post(remove_supplier_side='on')
+        notice = PlatformNotice.objects.filter(
+            recipient=self.supplier_user, notice_type=PlatformNotice.TYPE_ACCOUNT_MIGRATED,
+            channel=PlatformNotice.CHANNEL_IN_PLATFORM,
+        ).get()
+        self.assertIn('from a supplier account', notice.body)
 
 
 class InvoiceResendGuardTests(TestCase):

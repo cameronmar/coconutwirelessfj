@@ -1784,11 +1784,16 @@ class SupplierProfile(models.Model):
     VERIFICATION_APPROVED  = 'approved'
     VERIFICATION_REJECTED  = 'rejected'
     VERIFICATION_SUSPENDED = 'suspended'
+    # Set when an admin moves the account over to the local pro side (see
+    # UserAdmin.migrate_to_tradie_view). Hides the supplier side without
+    # deleting the profile, so past enquiries/documents stay on record.
+    VERIFICATION_MOVED     = 'moved_to_provider'
     VERIFICATION_STATUS_CHOICES = [
         (VERIFICATION_PENDING,   'Pending review'),
         (VERIFICATION_APPROVED,  'Approved'),
         (VERIFICATION_REJECTED,  'Rejected'),
         (VERIFICATION_SUSPENDED, 'Suspended'),
+        (VERIFICATION_MOVED,     'Moved to local pro'),
     ]
 
     user              = models.OneToOneField(User, on_delete=models.CASCADE, related_name='supplier_profile')
@@ -1824,13 +1829,20 @@ class SupplierProfile(models.Model):
         super().save(*args, **kwargs)
 
     def can_receive_enquiries(self):
-        return self.verification_status not in (self.VERIFICATION_REJECTED, self.VERIFICATION_SUSPENDED)
+        return self.verification_status not in (
+            self.VERIFICATION_REJECTED, self.VERIFICATION_SUSPENDED, self.VERIFICATION_MOVED,
+        )
+
+    def is_moved_to_provider(self):
+        return self.verification_status == self.VERIFICATION_MOVED
 
     def enquiry_block_reason(self):
         if self.verification_status == self.VERIFICATION_REJECTED:
             return 'Your supplier account has been rejected. Please contact support.'
         if self.verification_status == self.VERIFICATION_SUSPENDED:
             return 'Your supplier account is currently suspended. Please contact support.'
+        if self.verification_status == self.VERIFICATION_MOVED:
+            return 'This account has moved to the local professional side and no longer takes supply enquiries.'
         return ''
 
     def supply_categories_display(self):

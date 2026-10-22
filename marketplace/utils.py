@@ -982,18 +982,19 @@ def notify_matching_tradies_new_job(task):
         send_fcm_push(profile.user, subject, f'New job in {task.get_town_display()}: {task.title[:60]}')
 
 
-def notify_client_migrated_to_tradie(user):
+def notify_client_migrated_to_tradie(user, from_label='client'):
     """
-    Notify a user whose account an admin has just migrated from client to
-    local professional (tradie) — e.g. someone who mistakenly registered as
-    a client. Not gated by an email preference (unlike the opt-in notices
-    above): this is a one-off account-level change the user needs to know
-    about regardless, not a recurring activity notification.
+    Notify a user whose account an admin has just migrated from client (or
+    supplier — pass from_label='supplier') to local professional (tradie),
+    e.g. someone who registered on the wrong side. Not gated by an email
+    preference (unlike the opt-in notices above): this is a one-off
+    account-level change the user needs to know about regardless, not a
+    recurring activity notification.
     """
     subject = 'Your Coconut Wireless Network account is now a Local Professional account'
     body = (
         f'Bula {user.first_name},\n\n'
-        f'Your Coconut Wireless Network account has been switched from a client account '
+        f'Your Coconut Wireless Network account has been switched from a {from_label} account '
         f'to a local professional account.\n\n'
         f'Please log in using the same email and password as before — you will now land on '
         f'the local professional side of the platform, where you can browse open jobs, send '

@@ -287,7 +287,7 @@ def get_own_available_roles(user):
         roles.append(User.ROLE_CLIENT)
     if hasattr(user, 'tradie_profile'):
         roles.append(User.ROLE_TRADIE)
-    if hasattr(user, 'supplier_profile'):
+    if hasattr(user, 'supplier_profile') and not user.supplier_profile.is_moved_to_provider():
         roles.append(User.ROLE_SUPPLIER)
     return roles
 
