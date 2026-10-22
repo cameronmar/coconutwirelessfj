@@ -7,8 +7,16 @@
     <p><strong>Name:</strong> {{ user_obj.full_name }}</p>
     <p><strong>Email:</strong> {{ user_obj.email }}</p>
     <p><strong>Current town:</strong> {{ user_obj.town|default:"—" }}</p>
+    <p><strong>Current account type:</strong> {{ from_label|capfirst }}</p>
+    {% if supplier %}
+    <p><strong>Supplier business:</strong> {{ supplier.business_name|default:"—" }}</p>
+    <p><strong>Supply categories:</strong> {{ supplier.supply_categories_display|join:", "|default:"—" }}</p>
+    {% endif %}
   </div>
-  <p>This switches the account from client to local professional (their email and password stay the same), creates a local professional profile pending verification, and emails them to log back in on the local pro side.</p>
+  <p>This switches the account from {{ from_label }} to local professional (their email and password stay the same), creates a local professional profile pending verification, and emails them to log back in on the local pro side.</p>
+  {% if supplier %}
+  <p>Their business name, bio, service towns, TIN and TIN letter are carried over from the supplier profile.</p>
+  {% endif %}
 
   <form method="post">
     {% csrf_token %}
@@ -35,6 +43,20 @@
           {% endfor %}
         </div>
       </div>
+      {% if supplier %}
+      <div class="form-row">
+        <div>
+          <label style="font-weight:normal;width:auto;">
+            <input type="checkbox" name="remove_supplier_side" {% if remove_supplier_side %}checked{% endif %}>
+            <strong>Take them off the supplier side</strong>
+          </label>
+          <div class="help" style="margin-left:0;">
+            Ticked: they stop appearing in supplier listings, can't receive new supply enquiries, and lose the Supplier tab. Nothing is deleted — past enquiries, quotes and documents stay on record, and the supplier profile is marked "Moved to local pro".<br>
+            Unticked: they keep both sides and can switch between them with the role tabs.
+          </div>
+        </div>
+      </div>
+      {% endif %}
     </fieldset>
     <div class="submit-row">
       <input type="submit" value="Migrate to Local Professional" class="default">
