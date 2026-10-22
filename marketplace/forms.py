@@ -312,6 +312,53 @@ class ServiceAreaForm(forms.ModelForm):
         return list(self.cleaned_data['service_towns'])
 
 
+class TradesForm(forms.ModelForm):
+    """Lets an already-registered local pro update the service categories
+    they offer, after signup — TradieRegistrationForm.trades only ever sets
+    this once, at registration."""
+    trades = forms.MultipleChoiceField(
+        choices=[], widget=forms.CheckboxSelectMultiple,
+        label='Services you offer',
+    )
+
+    class Meta:
+        model = TradieProfile
+        fields = ['trades']
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields['trades'].choices = TradeCategory.get_choices()
+
+    def clean_trades(self):
+        trades = list(self.cleaned_data['trades'])
+        if not trades:
+            raise ValidationError('Select at least one service you offer.')
+        return trades
+
+
+class SupplyCategoriesForm(forms.ModelForm):
+    """Lets an already-registered supplier update the categories they supply,
+    after signup — mirrors TradesForm for local pros."""
+    supply_categories = forms.MultipleChoiceField(
+        choices=[], widget=forms.CheckboxSelectMultiple,
+        label='Categories you supply',
+    )
+
+    class Meta:
+        model = SupplierProfile
+        fields = ['supply_categories']
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields['supply_categories'].choices = SupplyCategory.get_choices()
+
+    def clean_supply_categories(self):
+        cats = list(self.cleaned_data['supply_categories'])
+        if not cats:
+            raise ValidationError('Select at least one category you supply.')
+        return cats
+
+
 class LoginForm(forms.Form):
     email       = forms.EmailField(widget=_input('you@example.fj', type_='email'))
     password    = forms.CharField(widget=forms.PasswordInput(attrs={'class': 'form-input', 'placeholder': 'Your password'}))

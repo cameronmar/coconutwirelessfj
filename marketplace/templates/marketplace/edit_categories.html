@@ -1,0 +1,43 @@
+{% extends "marketplace/base.html" %}
+{% block title %}{{ page_title }} – The Coconut Wireless Network{% endblock %}
+
+{% block extra_css %}
+<style>
+.settings-page{max-width:600px;margin:0 auto;padding:28px 20px 50px;}
+.page-title{font-size:1.4rem;font-weight:700;margin:0 0 4px;}
+.page-sub{color:var(--muted);font-size:.9rem;margin:0 0 22px;}
+.cat-chips{display:flex;gap:8px;flex-wrap:wrap;}
+.cat-chip{display:flex;align-items:center;gap:6px;padding:8px 14px;border:1.5px solid #cce4ef;border-radius:20px;font-size:.85rem;cursor:pointer;}
+.cat-chip input{accent-color:var(--blue);}
+.cat-chip:has(input:checked){border-color:var(--blue);background:var(--blue-light);color:var(--blue);font-weight:600;}
+.field-error{color:#c0392b;font-size:.82rem;margin-top:6px;}
+.back-link{display:block;text-align:center;margin-top:12px;font-size:.85rem;color:var(--muted);}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="settings-page">
+  <div class="page-title">{{ page_title }}</div>
+  <p class="page-sub">{{ page_sub }}</p>
+
+  <div class="card">
+    <form method="post">
+      {% csrf_token %}
+      <div class="cat-chips">
+        {% for value, label in choices %}
+        <label class="cat-chip">
+          <input type="checkbox" name="{{ field.html_name }}" value="{{ value }}"
+            {% if value in field.value %}checked{% endif %}>
+          {{ label }}
+        </label>
+        {% empty %}
+        <p class="page-sub">No categories are set up yet — please contact support.</p>
+        {% endfor %}
+      </div>
+      {% for e in field.errors %}<div class="field-error">{{ e }}</div>{% endfor %}
+      <button type="submit" class="btn btn-primary" style="width:100%;margin-top:18px;">{{ save_label }}</button>
+    </form>
+  </div>
+  <a href="{% url back_url %}" class="back-link">← Back to dashboard</a>
+</div>
+{% endblock %}

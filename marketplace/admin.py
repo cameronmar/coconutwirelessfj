@@ -7,6 +7,7 @@ from decimal import Decimal
 
 from django import forms
 from django.contrib import admin, messages
+from django.contrib.admin.helpers import ActionForm
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
@@ -15,6 +16,7 @@ from django.db.models.functions import Greatest
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import path, reverse
 from django.utils import timezone
+from django.utils.html import format_html
 
 from .constants import TOWN_CHOICES
 from .models import (
@@ -243,8 +245,104 @@ class UserAdmin(BaseUserAdmin):
 
 # ── TradieProfile ─────────────────────────────────────────────────────────────
 
+def _choices_keeping_current(live_choices, current):
+    """Live category choices plus any slugs already on the profile that are no
+    longer active, so saving a profile in admin never silently strips them."""
+    known = {slug for slug, _ in live_choices}
+    return list(live_choices) + [(s, f'{s} (inactive)') for s in (current or []) if s not in known]
+
+
+def _add_category_help(admin_url_name):
+    return format_html(
+        'Click to toggle. Missing one? <a href="{}" target="_blank">+ Add a new category</a> '
+        '(opens in a new tab — reload this page after saving it).',
+        reverse(admin_url_name),
+    )
+
+
+def _category_action_form(category_model):
+    """Action-bar form with a category picker next to the Action dropdown, used
+    by CategoryBulkActionsMixin's add/remove actions."""
+    class CategoryActionForm(ActionForm):
+        category = forms.ChoiceField(
+            choices=lambda: [('', '— category —')] + list(category_model.get_choices()),
+            required=False, label='Category',
+        )
+    return CategoryActionForm
+
+
+class CategoryBulkActionsMixin:
+    """Changelist actions to add or remove one category across many profiles at
+    once: tick the profiles, pick a category and the action, click Go."""
+    category_field = ''
+    category_model = None
+
+    def _bulk_category(self, request, queryset, add):
+        slug = request.POST.get('category')
+        if not slug:
+            self.message_user(request, 'Pick a category from the Category dropdown first.', messages.ERROR)
+            return
+        label = self.category_model.get_label_map().get(slug, slug)
+        changed = 0
+        for profile in queryset:
+            current = list(getattr(profile, self.category_field) or [])
+            if add and slug not in current:
+                current.append(slug)
+            elif not add and slug in current:
+                current.remove(slug)
+            else:
+                continue
+            setattr(profile, self.category_field, current)
+            profile.save(update_fields=[self.category_field])
+            changed += 1
+        verb, prep = ('Added', 'to') if add else ('Removed', 'from')
+        self.message_user(request, f'{verb} "{label}" {prep} {changed} profile(s).')
+
+    @admin.action(description='Add chosen category to selected')
+    def add_category(self, request, queryset):
+        self._bulk_category(request, queryset, add=True)
+
+    @admin.action(description='Remove chosen category from selected')
+    def remove_category(self, request, queryset):
+        self._bulk_category(request, queryset, add=False)
+
+
+class TradieProfileAdminForm(forms.ModelForm):
+    """Replaces the raw JSON textareas for trades/service_towns with
+    click-to-toggle checkboxes, so admins don't have to hand-type JSON."""
+    trades = forms.MultipleChoiceField(
+        choices=[], widget=forms.CheckboxSelectMultiple, required=False,
+        label='Trade categories',
+    )
+    service_towns = forms.MultipleChoiceField(
+        choices=TOWN_CHOICES, widget=forms.CheckboxSelectMultiple, required=False,
+        label='Service towns',
+    )
+
+    class Meta:
+        model = TradieProfile
+        fields = '__all__'
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields['trades'].choices = _choices_keeping_current(
+            TradeCategory.get_choices(), self.instance.trades if self.instance.pk else [],
+        )
+        self.fields['trades'].help_text = _add_category_help('admin:marketplace_tradecategory_add')
+
+    def clean_trades(self):
+        return list(self.cleaned_data['trades'])
+
+    def clean_service_towns(self):
+        return list(self.cleaned_data['service_towns'])
+
+
 @admin.register(TradieProfile)
-class TradieProfileAdmin(admin.ModelAdmin):
+class TradieProfileAdmin(CategoryBulkActionsMixin, admin.ModelAdmin):
+    form = TradieProfileAdminForm
+    action_form = _category_action_form(TradeCategory)
+    category_field = 'trades'
+    category_model = TradeCategory
     list_display  = ['user', 'business_name', 'years_experience', 'service_towns_display', 'verification_status', 'has_tin_letter', 'documents_verified', 'needs_safety_review_display', 'is_founding_member', 'founding_member_credit_balance']
     list_filter   = ['verification_status', 'documents_verified', 'safety_documents_reviewed', 'is_founding_member']
     search_fields = ['user__email', 'user__first_name', 'business_name', 'tin']
@@ -276,7 +374,7 @@ class TradieProfileAdmin(admin.ModelAdmin):
         ('Founding Member', {'fields': ('is_founding_member', 'founding_member_credit_balance')}),
         ('Notes',            {'fields': ('verification_notes',)}),
     )
-    actions = ['mark_safety_documents_reviewed']
+    actions = ['add_category', 'remove_category', 'mark_safety_documents_reviewed']
 
     def service_towns_display(self, obj):
         return obj.service_towns_display()
@@ -708,6 +806,8 @@ class PrivateReviewAdmin(admin.ModelAdmin):
 @admin.register(TradeCategory)
 class TradeCategoryAdmin(admin.ModelAdmin):
     list_display = ['name', 'slug', 'icon', 'parent', 'active']
+    list_editable = ['active']
+    list_filter = ['active']
     prepopulated_fields = {'slug': ('name',)}
     search_fields = ['name', 'slug']
 
@@ -1388,13 +1488,55 @@ class SupplyCategoryAdmin(admin.ModelAdmin):
     list_display = ('name', 'slug', 'icon', 'active', 'sort_order')
     prepopulated_fields = {'slug': ('name',)}
     list_editable = ('active', 'sort_order')
+    list_filter = ('active',)
+    search_fields = ('name', 'slug')
+
+
+class SupplierProfileAdminForm(forms.ModelForm):
+    """Click-to-toggle checkboxes for supply_categories/service_towns instead of
+    raw JSON textareas — mirrors TradieProfileAdminForm."""
+    supply_categories = forms.MultipleChoiceField(
+        choices=[], widget=forms.CheckboxSelectMultiple, required=False,
+        label='Supply categories',
+    )
+    service_towns = forms.MultipleChoiceField(
+        choices=TOWN_CHOICES, widget=forms.CheckboxSelectMultiple, required=False,
+        label='Service towns',
+    )
+
+    class Meta:
+        model = SupplierProfile
+        fields = '__all__'
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields['supply_categories'].choices = _choices_keeping_current(
+            SupplyCategory.get_choices(), self.instance.supply_categories if self.instance.pk else [],
+        )
+        self.fields['supply_categories'].help_text = _add_category_help('admin:marketplace_supplycategory_add')
+
+    def clean_supply_categories(self):
+        return list(self.cleaned_data['supply_categories'])
+
+    def clean_service_towns(self):
+        return list(self.cleaned_data['service_towns'])
 
 
 @admin.register(SupplierProfile)
-class SupplierProfileAdmin(admin.ModelAdmin):
-    list_display = ('user', 'business_name', 'verification_status', 'documents_verified')
+class SupplierProfileAdmin(CategoryBulkActionsMixin, admin.ModelAdmin):
+    form = SupplierProfileAdminForm
+    action_form = _category_action_form(SupplyCategory)
+    category_field = 'supply_categories'
+    category_model = SupplyCategory
+    list_display = ('user', 'business_name', 'categories_display', 'verification_status', 'documents_verified')
     list_filter = ('verification_status',)
-    actions = ['approve_suppliers', 'reject_suppliers', 'suspend_suppliers']
+    search_fields = ('user__email', 'user__first_name', 'business_name')
+    raw_id_fields = ('user',)
+    actions = ['add_category', 'remove_category', 'approve_suppliers', 'reject_suppliers', 'suspend_suppliers']
+
+    @admin.display(description='Supply categories')
+    def categories_display(self, obj):
+        return ', '.join(obj.supply_categories_display()) or '—'
     readonly_fields = ('documents_verified',)
 
     @admin.action(description='Approve selected suppliers')

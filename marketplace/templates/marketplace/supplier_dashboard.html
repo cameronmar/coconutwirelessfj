@@ -43,6 +43,7 @@ footer{display:none;}
     <div class="sb-lbl">Enquiries</div>
     <a href="{% url 'supplier_dashboard' %}" class="sb-link active"><span class="icon">🏠</span>Dashboard</a>
     <a href="{% url 'supplier_profile' pk=user.pk %}" class="sb-link"><span class="icon">👤</span>My profile</a>
+    <a href="{% url 'edit_supply_categories' %}" class="sb-link"><span class="icon">🏷️</span>My categories</a>
     <a href="{% url 'browse_suppliers' %}" class="sb-link"><span class="icon">🔍</span>Browse suppliers</a>
   </aside>
 
