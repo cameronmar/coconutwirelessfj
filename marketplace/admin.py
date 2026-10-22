@@ -154,7 +154,7 @@ class UserAdmin(BaseUserAdmin):
         # column/filter above.
         return (
             super().get_queryset(request)
-            .select_related('tradie_profile')
+            .select_related('tradie_profile', 'supplier_profile')
             .annotate(has_accepted_terms=Exists(TermsAcceptance.objects.filter(user=OuterRef('pk'))))
         )
 
@@ -165,7 +165,7 @@ class UserAdmin(BaseUserAdmin):
 
     def migrate_link(self, obj):
         from django.utils.html import format_html
-        if obj.role == User.ROLE_CLIENT and not hasattr(obj, 'tradie_profile'):
+        if obj.role in (User.ROLE_CLIENT, User.ROLE_SUPPLIER) and not hasattr(obj, 'tradie_profile'):
             url = reverse('admin:marketplace_user_migrate_to_tradie', args=[obj.pk])
             return format_html('<a class="button" href="{}">Migrate to Local Pro</a>', url)
         return '—'
@@ -179,32 +179,48 @@ class UserAdmin(BaseUserAdmin):
 
     def migrate_to_tradie_view(self, request, pk):
         """
-        Move a user who mistakenly registered as a client over to the local
-        professional (tradie) side — admin picks their trade(s) and service
-        town(s), a bare TradieProfile is created (pending verification, same
-        as a fresh tradie registration), and the user is emailed telling them
-        to log back in on the local pro side.
+        Move a user who registered on the wrong side — as a client or as a
+        supplier — over to the local professional (tradie) side. Admin picks
+        their trade(s) and service town(s), a TradieProfile is created
+        (pending verification, same as a fresh tradie registration), and the
+        user is emailed telling them to log back in on the local pro side.
+
+        For suppliers, business name, bio, service towns, TIN and TIN letter
+        are carried over from the SupplierProfile, and the admin chooses
+        whether to take them off the supplier side. Taking them off marks
+        the SupplierProfile VERIFICATION_MOVED and deactivates the supplier
+        workspace rather than deleting anything, so past enquiries, quotes
+        and documents stay on record.
         """
         if not (self.has_change_permission(request) and request.user.has_perm('marketplace.add_tradieprofile')):
             raise PermissionDenied
 
         user = get_object_or_404(User, pk=pk)
-        if user.role != User.ROLE_CLIENT:
-            messages.error(request, f'{user} is not a client account.')
+        if user.role not in (User.ROLE_CLIENT, User.ROLE_SUPPLIER):
+            messages.error(request, f'{user} is not a client or supplier account.')
             return redirect(reverse('admin:marketplace_user_changelist'))
         if hasattr(user, 'tradie_profile'):
             messages.error(request, f'{user} already has a local professional profile.')
             return redirect(reverse('admin:marketplace_user_changelist'))
 
+        supplier = getattr(user, 'supplier_profile', None) if user.role == User.ROLE_SUPPLIER else None
+        from_label = 'supplier' if supplier else 'client'
+
         trade_choices = TradeCategory.get_choices()
         selected_trades = []
-        selected_towns = [user.town] if user.town else []
-        business_name_value = user.full_name
+        if supplier:
+            selected_towns = list(supplier.service_towns or []) or ([user.town] if user.town else [])
+            business_name_value = supplier.business_name or user.full_name
+        else:
+            selected_towns = [user.town] if user.town else []
+            business_name_value = user.full_name
+        remove_supplier_side = True
 
         if request.method == 'POST':
             selected_trades = request.POST.getlist('trades')
             selected_towns = request.POST.getlist('service_towns')
             business_name_value = (request.POST.get('business_name') or '').strip()
+            remove_supplier_side = request.POST.get('remove_supplier_side') == 'on'
 
             if not selected_trades:
                 messages.error(request, 'Select at least one trade.')
@@ -214,17 +230,30 @@ class UserAdmin(BaseUserAdmin):
                 with transaction.atomic():
                     user.role = User.ROLE_TRADIE
                     user.save(update_fields=['role'])
-                    TradieProfile.objects.create(
+                    profile = TradieProfile(
                         user=user,
                         business_name=business_name_value or user.full_name,
                         trades=selected_trades,
                         service_towns=selected_towns or ([user.town] if user.town else []),
                         verification_status=TradieProfile.VERIFICATION_PENDING,
                     )
+                    if supplier:
+                        profile.bio = supplier.bio
+                        profile.tin = supplier.tin
+                        if supplier.tin_letter:
+                            # Points at the same stored file — no copy needed.
+                            profile.tin_letter = supplier.tin_letter.name
+                    profile.save()
                     workspaces.ensure_user_capability(user, can_offer_services=True)
                     workspaces.create_individual_provider_workspace(user)
-                notify_client_migrated_to_tradie(user)
-                messages.success(request, f'{user} migrated to a local professional account and notified by email.')
+                    if supplier and remove_supplier_side:
+                        supplier.verification_status = SupplierProfile.VERIFICATION_MOVED
+                        supplier.save(update_fields=['verification_status', 'documents_verified'])
+                        Workspace.objects.filter(
+                            owner=user, workspace_type=Workspace.TYPE_SUPPLIER,
+                        ).update(active=False)
+                notify_client_migrated_to_tradie(user, from_label=from_label)
+                messages.success(request, f'{user} migrated from {from_label} to a local professional account and notified by email.')
                 return redirect(reverse('admin:marketplace_tradieprofile_change', args=[user.tradie_profile.pk]))
 
         context = dict(
@@ -232,6 +261,9 @@ class UserAdmin(BaseUserAdmin):
             title=f'Migrate {user} to Local Professional',
             opts=self.model._meta,
             user_obj=user,
+            supplier=supplier,
+            from_label=from_label,
+            remove_supplier_side=remove_supplier_side,
             trade_choices=trade_choices,
             town_choices=TOWN_CHOICES,
             selected_trades=selected_trades,

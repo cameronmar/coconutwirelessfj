@@ -2776,6 +2776,8 @@ def browse_suppliers(request):
 def supplier_profile(request, pk):
     supplier_user = get_object_or_404(User, pk=pk, role=User.ROLE_SUPPLIER)
     profile = get_object_or_404(SupplierProfile, user=supplier_user)
+    if profile.is_moved_to_provider():
+        raise Http404
     breakdown = profile.get_public_rating_breakdown()
     criteria_data = []
     if breakdown:
