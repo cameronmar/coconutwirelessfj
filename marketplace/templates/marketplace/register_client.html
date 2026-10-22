@@ -43,12 +43,12 @@ main{display:flex;align-items:center;justify-content:center;padding:36px 20px;mi
       </div>
       <a href="{% url 'register_tradie' %}" class="type-btn" style="text-decoration:none;">
         <h4>🔧 I'm a Local Professional</h4>
-        <p>Find work and grow my business</p>
+        <p>I provide goods and services</p>
       </a>
       {% if suppliers_visible %}
       <a href="{% url 'register_supplier' %}" class="type-btn" style="text-decoration:none;">
         <h4>📦 I'm a Supplier</h4>
-        <p>Supply goods or materials to clients</p>
+        <p>I only sell goods</p>
       </a>
       {% else %}
       <div class="type-btn disabled" title="Coming soon">
@@ -57,6 +57,7 @@ main{display:flex;align-items:center;justify-content:center;padding:36px 20px;mi
       </div>
       {% endif %}
     </div>
+    {% if suppliers_visible %}{% include "marketplace/_account_type_help.html" %}{% endif %}
 
     <div class="card">
       <form method="post">

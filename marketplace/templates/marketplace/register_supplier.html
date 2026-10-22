@@ -37,7 +37,8 @@
   <div class="reg-wrap">
     <h1>Register as a Supplier</h1>
     <p class="sub">Already have an account? <a href="{% url 'login' %}">Log in</a> &nbsp;|&nbsp; Looking to hire? <a href="{% url 'register_client' %}">Client sign up</a></p>
-    <div class="info-band">Supply goods and services to clients across Fiji · Receive enquiries and send itemised quotes</div>
+    <div class="info-band">Sell goods and materials to clients across Fiji · Receive enquiries and send itemised quotes</div>
+    {% include "marketplace/_account_type_help.html" with collapsed=True current="supplier" %}
 
     <form method="post" enctype="multipart/form-data">
       {% csrf_token %}
