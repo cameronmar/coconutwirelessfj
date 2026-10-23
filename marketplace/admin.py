@@ -114,13 +114,25 @@ class SocialAccountInline(admin.TabularInline):
         return False
 
 
+def _start_migrate_to_local_pro(modeladmin, request, users):
+    """Shared by the "Migrate to Local Pro" action on the Users and Supplier
+    Profiles lists: sends the admin to the migrate page for the one selected
+    account (each one needs its own trades picked, so it's one at a time)."""
+    if len(users) != 1:
+        modeladmin.message_user(
+            request, 'Select one account at a time to migrate to Local Pro.', messages.WARNING,
+        )
+        return None
+    return redirect(reverse('admin:marketplace_user_migrate_to_tradie', args=[users[0].pk]))
+
+
 @admin.register(User)
 class UserAdmin(BaseUserAdmin):
     ordering = ['email']
-    list_display = ['email', 'first_name', 'last_name', 'role', 'town', 'is_tester', 'is_market_founding_member', 'is_active', 'date_joined', 'accepted_terms_display', 'migrate_link']
+    list_display = ['email', 'first_name', 'last_name', 'role', 'town', 'is_tester', 'is_market_founding_member', 'is_active', 'date_joined', 'accepted_terms_display']
     list_filter  = ['role', 'town', 'is_tester', 'is_market_founding_member', 'is_active', HasAcceptedTermsFilter]
     search_fields = ['email', 'first_name', 'last_name']
-    actions = ['grant_tester_access', 'revoke_tester_access']
+    actions = ['grant_tester_access', 'revoke_tester_access', 'migrate_to_local_pro']
     readonly_fields = ['account_deleted_at']
     inlines = [SocialAccountInline]
     fieldsets = (
@@ -149,14 +161,15 @@ class UserAdmin(BaseUserAdmin):
         updated = queryset.update(is_tester=False)
         messages.success(request, f'Revoked tester access from {updated} user(s).')
 
+    @admin.action(description='Migrate to Local Pro (one at a time)')
+    def migrate_to_local_pro(self, request, queryset):
+        return _start_migrate_to_local_pro(self, request, list(queryset[:2]))
+
     def get_queryset(self, request):
-        # migrate_link()'s hasattr(obj, 'tradie_profile') check would
-        # otherwise run one query per row on this (the busiest) changelist;
-        # has_accepted_terms likewise avoids a query-per-row for the new
-        # column/filter above.
+        # has_accepted_terms avoids a query-per-row for the Terms
+        # column/filter on this (the busiest) changelist.
         return (
             super().get_queryset(request)
-            .select_related('tradie_profile', 'supplier_profile')
             .annotate(has_accepted_terms=Exists(TermsAcceptance.objects.filter(user=OuterRef('pk'))))
         )
 
@@ -164,14 +177,6 @@ class UserAdmin(BaseUserAdmin):
         return '✅' if obj.has_accepted_terms else '❌'
     accepted_terms_display.short_description = 'Terms'
     accepted_terms_display.admin_order_field = 'has_accepted_terms'
-
-    def migrate_link(self, obj):
-        from django.utils.html import format_html
-        if obj.role in (User.ROLE_CLIENT, User.ROLE_SUPPLIER) and not hasattr(obj, 'tradie_profile'):
-            url = reverse('admin:marketplace_user_migrate_to_tradie', args=[obj.pk])
-            return format_html('<a class="button" href="{}">Migrate to Local Pro</a>', url)
-        return '—'
-    migrate_link.short_description = 'Migrate'
 
     def get_urls(self):
         custom = [
@@ -1564,12 +1569,16 @@ class SupplierProfileAdmin(CategoryBulkActionsMixin, admin.ModelAdmin):
     list_filter = ('verification_status',)
     search_fields = ('user__email', 'user__first_name', 'business_name')
     raw_id_fields = ('user',)
-    actions = ['add_category', 'remove_category', 'approve_suppliers', 'reject_suppliers', 'suspend_suppliers']
+    actions = ['add_category', 'remove_category', 'approve_suppliers', 'reject_suppliers', 'suspend_suppliers', 'migrate_to_local_pro']
+    readonly_fields = ('documents_verified',)
 
     @admin.display(description='Supply categories')
     def categories_display(self, obj):
         return ', '.join(obj.supply_categories_display()) or '—'
-    readonly_fields = ('documents_verified',)
+
+    @admin.action(description='Migrate to Local Pro (one at a time)')
+    def migrate_to_local_pro(self, request, queryset):
+        return _start_migrate_to_local_pro(self, request, [p.user for p in queryset.select_related('user')[:2]])
 
     @admin.action(description='Approve selected suppliers')
     def approve_suppliers(self, request, queryset):

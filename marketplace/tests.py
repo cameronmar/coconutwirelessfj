@@ -1898,10 +1898,31 @@ class MigrateSupplierToTradieAdminTests(TestCase):
         data.update(extra)
         return self.client.post(self.url, data, secure=True)
 
-    def test_migrate_link_shown_for_supplier(self):
-        from . import admin as marketplace_admin
-        model_admin = marketplace_admin.UserAdmin(User, marketplace_admin.admin.site)
-        self.assertIn(self.url, model_admin.migrate_link(self.supplier_user))
+    def test_supplier_profiles_dropdown_action_opens_migrate_page(self):
+        response = self.client.post(
+            reverse('admin:marketplace_supplierprofile_changelist'),
+            {'action': 'migrate_to_local_pro', '_selected_action': [self.supplier.pk]}, secure=True,
+        )
+        self.assertRedirects(response, self.url, fetch_redirect_response=False)
+
+    def test_users_dropdown_action_opens_migrate_page(self):
+        response = self.client.post(
+            reverse('admin:marketplace_user_changelist'),
+            {'action': 'migrate_to_local_pro', '_selected_action': [self.supplier_user.pk]}, secure=True,
+        )
+        self.assertRedirects(response, self.url, fetch_redirect_response=False)
+
+    def test_dropdown_action_needs_exactly_one_account(self):
+        other = User.objects.create_user(email='other-sup@example.com', password='pass12345', role=User.ROLE_SUPPLIER)
+        other_profile = SupplierProfile.objects.create(user=other)
+        response = self.client.post(
+            reverse('admin:marketplace_supplierprofile_changelist'),
+            {'action': 'migrate_to_local_pro', '_selected_action': [self.supplier.pk, other_profile.pk]}, secure=True,
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertNotEqual(response.url, self.url)
+        self.supplier_user.refresh_from_db()
+        self.assertEqual(self.supplier_user.role, User.ROLE_SUPPLIER)
 
     def test_move_and_take_off_supplier_side(self):
         from . import workspaces
