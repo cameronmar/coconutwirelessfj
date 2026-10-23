@@ -37,6 +37,9 @@ if IS_PRODUCTION and (len(SECRET_KEY) < 50 or SECRET_KEY.startswith('django-inse
     raise ImproperlyConfigured(
         'SECRET_KEY must be at least 50 characters and not use the django-insecure prefix in production.'
     )
+# Previous keys, still accepted for existing sessions/tokens while rotating.
+# Comma-separated; remove once old sessions have expired.
+SECRET_KEY_FALLBACKS = _get_list_env('SECRET_KEY_FALLBACKS', '')
 
 ALLOWED_HOSTS = _get_list_env(
     'ALLOWED_HOSTS',
