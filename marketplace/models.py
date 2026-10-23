@@ -655,6 +655,16 @@ class Task(models.Model):
         (STATUS_DISPUTED,    'Disputed'),
     ]
 
+    # Reasons a poster picks when deleting their own open task (views.delete_task).
+    REMOVAL_NO_BIDS         = 'no_bids_deadline_passed'
+    REMOVAL_FOUND_ELSEWHERE = 'found_help_elsewhere'
+    REMOVAL_PREFER_NOT      = 'prefer_not_to_say'
+    REMOVAL_REASON_CHOICES  = [
+        (REMOVAL_NO_BIDS,         'No bids and the deadline passed'),
+        (REMOVAL_FOUND_ELSEWHERE, 'Found help elsewhere'),
+        (REMOVAL_PREFER_NOT,      'Prefer not to say'),
+    ]
+
     client          = models.ForeignKey(User, on_delete=models.CASCADE, related_name='tasks')
     title           = models.CharField(max_length=200)
     category        = models.CharField(max_length=20, blank=True, db_index=True)  # Slug into TradeCategory; see category_label
@@ -730,6 +740,10 @@ class Task(models.Model):
     removed_at          = models.DateTimeField(null=True, blank=True)
     removed_by          = models.ForeignKey('User', null=True, blank=True, on_delete=models.SET_NULL, related_name='removed_tasks')
     removal_reason      = models.TextField(blank=True)
+    removal_reason_code = models.CharField(
+        max_length=30, blank=True, choices=REMOVAL_REASON_CHOICES,
+        verbose_name='Reason given when poster deleted it',
+    )
     cancellation_reason = models.TextField(blank=True)
     backdoor_monitoring_flag  = models.BooleanField(default=False, verbose_name='Platform Circumvention Flag')
     backdoor_monitoring_note  = models.TextField(blank=True, verbose_name='Platform Circumvention Note')
@@ -1524,6 +1538,27 @@ class PlatformCircumventionCase(models.Model):
         minimum_fee     = Decimal(str(minimum_fee))
         fee = total_job_value * fee_percentage / Decimal('100')
         return max(fee, minimum_fee)
+
+
+class ContractorReferral(models.Model):
+    """A contractor a client hired off-platform, shared (with the client's
+    consent) when they deleted a task as "Found help elsewhere", so the team
+    can invite that contractor to join the network."""
+    task               = models.ForeignKey(Task, on_delete=models.SET_NULL, null=True, blank=True, related_name='contractor_referrals')
+    referred_by        = models.ForeignKey(User, on_delete=models.CASCADE, related_name='contractor_referrals')
+    contractor_name    = models.CharField(max_length=150)
+    contractor_contact = models.CharField(max_length=150, verbose_name='Contractor phone or email')
+    contacted          = models.BooleanField(default=False, verbose_name='Invited / contacted')
+    notes              = models.TextField(blank=True)
+    created_at         = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = 'Contractor Referral'
+        verbose_name_plural = 'Contractor Referrals'
+
+    def __str__(self):
+        return f'{self.contractor_name} (referred by {self.referred_by})'
 
 
 # ── Platform Notice (admin-issued communications) ────────────────────────────

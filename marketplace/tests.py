@@ -19,6 +19,7 @@ from .forms import ChangePasswordForm, MarketOrderForm, ServiceAreaForm
 from .models import (
     BusinessProfile,
     ContentReport,
+    ContractorReferral,
     Invoice,
     InvoiceLine,
     LinkedAccount,
@@ -4475,3 +4476,108 @@ class SignupRequiredMiddlewareTests(TestCase):
         )
         self.assertEqual(response.status_code, 302)
         self.assertNotIn('evil.example.com', response['Location'])
+
+
+class DeleteTaskTests(TestCase):
+    def setUp(self):
+        self.poster = User.objects.create_user(
+            email='poster@example.com', password='pass12345', first_name='Mere', last_name='Poster',
+            role=User.ROLE_CLIENT, town='Suva',
+        )
+        self.pro = User.objects.create_user(
+            email='bidder@example.com', password='pass12345', first_name='Jone', last_name='Bidder',
+            role=User.ROLE_TRADIE, town='Suva',
+        )
+        self.task = Task.objects.create(
+            client=self.poster, title='Fix sink', category='plumbing',
+            description='Kitchen sink leaking', budget=Decimal('150.00'), town='Suva',
+        )
+        self.quote = Quote.objects.create(task=self.task, tradie=self.pro, price=Decimal('120.00'), message='Can do')
+        self.url = reverse('delete_task', args=[self.task.pk])
+        self.client.force_login(self.poster)
+
+    def _delete(self, **data):
+        with mock.patch('marketplace.views.notify_admin') as notify:
+            response = self.client.post(self.url, data, secure=True)
+        self.task.refresh_from_db()
+        return response, notify
+
+    def test_task_page_shows_delete_button_to_poster_only(self):
+        self.assertContains(self.client.get(reverse('task_detail', args=[self.task.pk]), secure=True), self.url)
+        self.client.force_login(self.pro)
+        self.assertNotContains(self.client.get(reverse('task_detail', args=[self.task.pk]), secure=True), self.url)
+
+    def test_no_bids_reason_deletes_without_flag(self):
+        response, notify = self._delete(reason=Task.REMOVAL_NO_BIDS)
+        self.assertRedirects(response, reverse('dashboard'), fetch_redirect_response=False)
+        self.assertEqual(self.task.status, Task.STATUS_CANCELLED)
+        self.assertIsNotNone(self.task.removed_at)
+        self.assertEqual(self.task.removal_reason_code, Task.REMOVAL_NO_BIDS)
+        self.assertFalse(self.task.backdoor_monitoring_flag)
+        notify.assert_not_called()
+        self.quote.refresh_from_db()
+        self.assertEqual(self.quote.status, Quote.STATUS_DECLINED)
+
+    def test_found_elsewhere_with_consent_saves_referral(self):
+        response, notify = self._delete(
+            reason=Task.REMOVAL_FOUND_ELSEWHERE, invite_contractor='yes',
+            contractor_name='Ratu Plumbing', contractor_contact='912 3456',
+        )
+        self.assertEqual(response.status_code, 302)
+        referral = ContractorReferral.objects.get(task=self.task)
+        self.assertEqual((referral.contractor_name, referral.contractor_contact), ('Ratu Plumbing', '912 3456'))
+        self.assertFalse(self.task.backdoor_monitoring_flag)
+        self.assertEqual(notify.call_count, 1)
+        self.assertIn('Contractor referral', notify.call_args[0][0])
+
+    def test_found_elsewhere_yes_requires_name_and_contact(self):
+        response, _ = self._delete(reason=Task.REMOVAL_FOUND_ELSEWHERE, invite_contractor='yes')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.task.status, Task.STATUS_OPEN)
+        self.assertFalse(ContractorReferral.objects.exists())
+
+    def test_found_elsewhere_requires_yes_or_no(self):
+        response, _ = self._delete(reason=Task.REMOVAL_FOUND_ELSEWHERE)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.task.status, Task.STATUS_OPEN)
+
+    def test_found_elsewhere_without_consent_quietly_flags(self):
+        response, notify = self._delete(reason=Task.REMOVAL_FOUND_ELSEWHERE, invite_contractor='no')
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(self.task.backdoor_monitoring_flag)
+        self.assertFalse(self.task.backdoor_reviewed)
+        self.assertIn("declined to share the contractor's details", self.task.backdoor_monitoring_note)
+        self.assertIn('Jone Bidder', self.task.backdoor_monitoring_note)
+        self.assertIn('Possible platform circumvention', notify.call_args[0][0])
+
+    def test_prefer_not_to_say_quietly_flags(self):
+        with mock.patch('marketplace.views.notify_admin') as notify:
+            response = self.client.post(self.url, {'reason': Task.REMOVAL_PREFER_NOT}, secure=True, follow=True)
+        self.task.refresh_from_db()
+        self.assertTrue(self.task.backdoor_monitoring_flag)
+        self.assertEqual(notify.call_count, 1)
+        # The poster sees an ordinary confirmation, nothing about monitoring.
+        self.assertContains(response, 'Your task has been deleted.')
+        self.assertNotContains(response, 'circumvention')
+
+    def test_deleted_task_leaves_dashboard_and_browse(self):
+        self._delete(reason=Task.REMOVAL_NO_BIDS)
+        dash = self.client.get(reverse('client_dashboard'), secure=True)
+        self.assertNotContains(dash, 'Fix sink')
+        self.client.force_login(self.pro)
+        self.assertNotContains(self.client.get(reverse('browse_tasks'), secure=True), 'Fix sink')
+
+    def test_cannot_delete_assigned_task(self):
+        self.task.status = Task.STATUS_ASSIGNED
+        self.task.save()
+        response, _ = self._delete(reason=Task.REMOVAL_NO_BIDS)
+        self.assertRedirects(response, reverse('task_detail', args=[self.task.pk]), fetch_redirect_response=False)
+        self.assertIsNone(self.task.removed_at)
+
+    def test_cannot_delete_someone_elses_task(self):
+        other = User.objects.create_user(email='other@example.com', password='pass12345', role=User.ROLE_CLIENT)
+        self.client.force_login(other)
+        response = self.client.post(self.url, {'reason': Task.REMOVAL_NO_BIDS}, secure=True)
+        self.assertEqual(response.status_code, 404)
+        self.task.refresh_from_db()
+        self.assertIsNone(self.task.removed_at)

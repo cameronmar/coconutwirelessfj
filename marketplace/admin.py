@@ -20,6 +20,7 @@ from django.utils.html import format_html
 
 from .constants import TOWN_CHOICES
 from .models import (
+    ContractorReferral,
     ContentReport,
     MarketListing,
     MarketOrder,
@@ -617,13 +618,25 @@ class QuotingAppointmentInline(admin.TabularInline):
     show_change_link = True
 
 
+@admin.register(ContractorReferral)
+class ContractorReferralAdmin(admin.ModelAdmin):
+    """Contractors clients hired off-platform and agreed we can invite —
+    collected when a task is deleted as "Found help elsewhere"."""
+    list_display  = ['contractor_name', 'contractor_contact', 'referred_by', 'task', 'contacted', 'created_at']
+    list_editable = ['contacted']
+    list_filter   = ['contacted', 'created_at']
+    search_fields = ['contractor_name', 'contractor_contact', 'referred_by__email', 'task__title']
+    raw_id_fields = ['referred_by', 'task']
+    readonly_fields = ['created_at']
+
+
 @admin.register(Task)
 class TaskAdmin(admin.ModelAdmin):
     list_display  = ['title', 'client', 'category', 'town', 'budget', 'status', 'assigned_tradie', 'circumvention_flag_display', 'created_at']
     list_filter   = [
         'status', 'category', 'town', 'urgency',
         HasQuotingAppointmentFilter, AppointmentStatusFilter, RemovedOrCancelledFilter,
-        CompletedJobBillingFilter,
+        'removal_reason_code', CompletedJobBillingFilter,
         'backdoor_monitoring_flag', 'backdoor_reviewed', 'created_at',
     ]
     search_fields = ['title', 'client__email', 'description']
@@ -635,7 +648,7 @@ class TaskAdmin(admin.ModelAdmin):
         ('Budget & Value', {'fields': ('budget', 'final_job_value', 'budget_type')}),
         ('Materials & Inclusions', {'fields': ('materials_responsibility', 'meals_provided', 'parking_available_flag', 'site_access_available', 'tools_required', 'rubbish_removal_required', 'after_hours_required', 'on_site_inspection_required', 'delivery_required', 'clean_up_required', 'client_provide_photos', 'warranty_followup_requested', 'materials_notes', 'parking_notes', 'access_notes', 'special_instructions')}),
         ('Assignment & Status', {'fields': ('client', 'client_workspace', 'assigned_tradie', 'assigned_provider_workspace', 'status')}),
-        ('Removal & Platform Circumvention Monitoring', {'fields': ('removed_at', 'removed_by', 'removal_reason', 'cancellation_reason', 'backdoor_monitoring_flag', 'backdoor_monitoring_note', 'backdoor_reviewed', 'backdoor_reviewed_at', 'backdoor_reviewed_by')}),
+        ('Removal & Platform Circumvention Monitoring', {'fields': ('removed_at', 'removed_by', 'removal_reason_code', 'removal_reason', 'cancellation_reason', 'backdoor_monitoring_flag', 'backdoor_monitoring_note', 'backdoor_reviewed', 'backdoor_reviewed_at', 'backdoor_reviewed_by')}),
         ('Timestamps', {'fields': ('created_at',)}),
     )
     date_hierarchy = 'created_at'

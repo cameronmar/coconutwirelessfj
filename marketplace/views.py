@@ -35,6 +35,7 @@ from .forms import (
     AddSupplierRoleForm,
     AddTradieRoleForm,
     ChangePasswordForm,
+    DeleteTaskForm,
     ClearLinkedLoginForm,
     ClientRegistrationForm,
     ContactSupportForm,
@@ -65,6 +66,7 @@ from .forms import (
 )
 from .models import (
     ContentReport,
+    ContractorReferral,
     Invoice,
     LinkedAccount,
     MarketListing,
@@ -900,7 +902,7 @@ def dashboard(request):
 @login_required
 def client_dashboard(request):
     _require_role(request, User.ROLE_CLIENT)
-    tasks = request.user.tasks.prefetch_related('quotes')
+    tasks = request.user.tasks.filter(removed_at__isnull=True).prefetch_related('quotes')
     ctx = {
         'open_tasks':      tasks.filter(status=Task.STATUS_OPEN),
         'assigned_tasks':  tasks.filter(status=Task.STATUS_ASSIGNED),
@@ -947,7 +949,7 @@ def tradie_dashboard(request):
 
     # Local pros can post jobs too (e.g. needing another local pro themselves)
     # instead of needing a second client account — same Task.client FK either way.
-    posted_tasks = request.user.tasks.prefetch_related('quotes')
+    posted_tasks = request.user.tasks.filter(removed_at__isnull=True).prefetch_related('quotes')
 
     provider_appointments = request.user.provider_quoting_appointments.select_related('task', 'client').prefetch_related('slots').order_by('-created_at')
     ctx = {
@@ -1279,6 +1281,89 @@ def edit_task_dates(request, pk):
     return render(request, 'marketplace/edit_task_dates.html', {'form': form, 'task': task})
 
 
+@login_required
+def delete_task(request, pk):
+    """
+    Let a poster delete their own open task, giving a reason. The task is
+    kept (status cancelled, removed_at set) rather than erased, so quotes
+    and messages stay on record for any circumvention review.
+
+    "Found help elsewhere" + consent saves a ContractorReferral for the team
+    to invite. "Found help elsewhere" without consent, or "Prefer not to
+    say", quietly sets the platform circumvention flag and emails the admin;
+    the poster sees the same confirmation either way.
+    """
+    _require_task_poster(request)
+    task = get_object_or_404(Task, pk=pk, client=request.user, removed_at__isnull=True)
+    if task.status != Task.STATUS_OPEN:
+        flash.error(request, "This task can't be deleted because a local professional has already been hired.")
+        return redirect('task_detail', pk=pk)
+
+    form = DeleteTaskForm(request.POST or None)
+    if request.method == 'POST' and form.is_valid():
+        cd = form.cleaned_data
+        reason = cd['reason']
+        reason_label = dict(Task.REMOVAL_REASON_CHOICES)[reason]
+        shared_contractor = reason == Task.REMOVAL_FOUND_ELSEWHERE and cd['invite_contractor'] == 'yes'
+        possible_circumvention = (
+            reason == Task.REMOVAL_PREFER_NOT
+            or (reason == Task.REMOVAL_FOUND_ELSEWHERE and cd['invite_contractor'] == 'no')
+        )
+        bidders = sorted({q.tradie.full_name or q.tradie.email for q in task.quotes.select_related('tradie')})
+
+        with transaction.atomic():
+            task.status = Task.STATUS_CANCELLED
+            task.removed_at = timezone.now()
+            task.removed_by = request.user
+            task.removal_reason_code = reason
+            task.removal_reason = f'Deleted by poster: {reason_label}'
+            referral = None
+            if shared_contractor:
+                referral = ContractorReferral.objects.create(
+                    task=task, referred_by=request.user,
+                    contractor_name=cd['contractor_name'].strip(),
+                    contractor_contact=cd['contractor_contact'].strip(),
+                )
+            if possible_circumvention:
+                detail = ("declined to share the contractor's details"
+                          if reason == Task.REMOVAL_FOUND_ELSEWHERE else 'chose not to give a reason')
+                task.backdoor_monitoring_flag = True
+                task.backdoor_reviewed = False
+                task.backdoor_monitoring_note = (
+                    f'Poster deleted this task and {detail}. '
+                    f'Quotes received: {len(bidders)}{" (" + ", ".join(bidders) + ")" if bidders else ""}.'
+                )
+            task.save()
+            task.quotes.filter(status=Quote.STATUS_PENDING).update(status=Quote.STATUS_DECLINED)
+            task.quoting_appointments.filter(status__in=[
+                QuotingAppointment.STATUS_REQUESTED,
+                QuotingAppointment.STATUS_ALTERNATIVE_PROPOSED,
+                QuotingAppointment.STATUS_ACCEPTED,
+            ]).update(status=QuotingAppointment.STATUS_CANCELLED)
+
+        task_admin_url = request.build_absolute_uri(reverse('admin:marketplace_task_change', args=[task.pk]))
+        if referral:
+            notify_admin(
+                f'Contractor referral: {referral.contractor_name}',
+                f'{request.user.full_name} ({request.user.email}) deleted "{task.title}" after finding help '
+                f'elsewhere, and agreed we can invite their contractor to join.\n\n'
+                f'Contractor: {referral.contractor_name}\n'
+                f'Contact: {referral.contractor_contact}\n\n'
+                f'Task: {task_admin_url}',
+            )
+        if possible_circumvention:
+            notify_admin(
+                f'Possible platform circumvention: "{task.title}"',
+                f'{request.user.full_name} ({request.user.email}) deleted "{task.title}" '
+                f'with reason "{reason_label}". {task.backdoor_monitoring_note}\n\n'
+                f'The task has been flagged for circumvention review: {task_admin_url}',
+            )
+        flash.success(request, 'Your task has been deleted.')
+        return redirect('dashboard')
+
+    return render(request, 'marketplace/delete_task.html', {'form': form, 'task': task})
+
+
 # ── Task detail ───────────────────────────────────────────────────────────────
 
 def task_detail(request, pk):
@@ -1318,6 +1403,12 @@ def task_detail(request, pk):
         request.user.is_authenticated
         and request.user == task.client
         and task.status in _EDITABLE_DATE_STATUSES
+    )
+    can_delete_task = (
+        request.user.is_authenticated
+        and request.user == task.client
+        and task.status == Task.STATUS_OPEN
+        and task.removed_at is None
     )
 
     appointments = task.quoting_appointments.select_related('provider', 'client', 'selected_slot').prefetch_related('slots').order_by('-created_at')
@@ -1376,6 +1467,7 @@ def task_detail(request, pk):
         'can_accept':      can_accept,
         'can_complete':    can_complete,
         'can_edit_dates':  can_edit_dates,
+        'can_delete_task': can_delete_task,
         'can_rate_tradie': can_rate_tradie,
         'can_rate_client': can_rate_client,
         'client_has_rated': client_has_rated,

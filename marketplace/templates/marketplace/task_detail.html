@@ -397,6 +397,9 @@
         {% if can_edit_dates %}
           <a href="{% url 'edit_task_dates' task.pk %}" class="btn btn-outline-blue btn-sm" style="width:100%;text-align:center;margin-top:10px;">Edit dates</a>
         {% endif %}
+        {% if can_delete_task %}
+          <a href="{% url 'delete_task' task.pk %}" class="btn btn-sm" style="width:100%;text-align:center;margin-top:10px;border:1.5px solid #c0392b;color:#c0392b;background:none;">Delete task</a>
+        {% endif %}
         {% if can_complete %}
           <form method="post" action="{% url 'complete_task' task.pk %}" style="margin-top:14px;">
             {% csrf_token %}

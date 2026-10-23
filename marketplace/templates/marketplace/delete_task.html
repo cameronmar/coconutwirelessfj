@@ -1,0 +1,89 @@
+{% extends "marketplace/base.html" %}
+{% block title %}Delete Task – The Coconut Wireless Network{% endblock %}
+
+{% block extra_css %}
+<style>
+.delete-page{max-width:560px;margin:32px auto;padding:0 20px 50px;}
+.delete-page h1{font-size:1.6rem;margin:0 0 5px;}
+.delete-page .sub{color:var(--muted);font-size:.92rem;margin:0 0 16px;}
+.form-card{background:var(--white);border-radius:16px;box-shadow:0 4px 18px rgba(0,80,120,.08);padding:22px;margin-bottom:18px;}
+.reason-list{display:flex;flex-direction:column;gap:8px;}
+.reason-opt{display:flex;align-items:center;gap:10px;padding:11px 14px;border:1.5px solid #cce4ef;border-radius:10px;cursor:pointer;font-size:.92rem;}
+.reason-opt input{accent-color:var(--blue);}
+.reason-opt:has(input:checked){border-color:var(--blue);background:var(--blue-light);font-weight:600;}
+.follow-up{margin-top:16px;padding-top:14px;border-top:1px solid var(--blue-light);}
+.follow-up .hint{color:var(--muted);font-size:.85rem;margin:2px 0 10px;}
+.yes-no{display:flex;gap:16px;margin-bottom:6px;}
+.btn-delete{width:100%;padding:13px;font-size:1rem;background:#c0392b;border-color:#c0392b;color:#fff;}
+.btn-delete:hover{background:#a93226;border-color:#a93226;}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="delete-page">
+  <div class="breadcrumb">
+    <a href="{% url 'task_detail' task.pk %}">← Back to task</a>
+  </div>
+
+  <h1>Delete this task</h1>
+  <p class="sub">Job: <strong>{{ task.title }}</strong>. Once deleted it's removed from your dashboard and local professionals can no longer quote on it.</p>
+
+  <form method="post" novalidate>
+    {% csrf_token %}
+    <div class="form-card">
+      <div class="field">
+        <label>{{ form.reason.label }}</label>
+        <div class="reason-list">
+          {% for radio in form.reason %}
+            <label class="reason-opt">{{ radio.tag }} {{ radio.choice_label }}</label>
+          {% endfor %}
+        </div>
+        {% for e in form.reason.errors %}<div class="field-error">{{ e }}</div>{% endfor %}
+      </div>
+
+      <div class="follow-up" id="foundElsewhere">
+        <div class="field">
+          <label>{{ form.invite_contractor.label }}</label>
+          <p class="hint">We'd love to have them on the network so you can hire them here next time.</p>
+          <div class="yes-no">
+            {% for radio in form.invite_contractor %}
+              <label class="field-checkbox">{{ radio.tag }} {{ radio.choice_label }}</label>
+            {% endfor %}
+          </div>
+          {% for e in form.invite_contractor.errors %}<div class="field-error">{{ e }}</div>{% endfor %}
+        </div>
+        <div id="contractorFields">
+          <div class="field">
+            <label for="{{ form.contractor_name.id_for_label }}">{{ form.contractor_name.label }}</label>
+            {{ form.contractor_name }}
+            {% for e in form.contractor_name.errors %}<div class="field-error">{{ e }}</div>{% endfor %}
+          </div>
+          <div class="field">
+            <label for="{{ form.contractor_contact.id_for_label }}">{{ form.contractor_contact.label }}</label>
+            {{ form.contractor_contact }}
+            {% for e in form.contractor_contact.errors %}<div class="field-error">{{ e }}</div>{% endfor %}
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <button type="submit" class="btn btn-delete">Delete task</button>
+  </form>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function updateFollowUps(){
+  var reason = document.querySelector('input[name="reason"]:checked');
+  var invite = document.querySelector('input[name="invite_contractor"]:checked');
+  var foundElsewhere = reason && reason.value === 'found_help_elsewhere';
+  document.getElementById('foundElsewhere').style.display = foundElsewhere ? '' : 'none';
+  document.getElementById('contractorFields').style.display = (foundElsewhere && invite && invite.value === 'yes') ? '' : 'none';
+}
+document.querySelectorAll('input[name="reason"], input[name="invite_contractor"]').forEach(function(r){
+  r.addEventListener('change', updateFollowUps);
+});
+updateFollowUps();
+</script>
+{% endblock %}
