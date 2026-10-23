@@ -603,6 +603,44 @@ class TaskForm(forms.ModelForm):
         }
 
 
+class DeleteTaskForm(forms.Form):
+    """Reason a poster gives when deleting their own open task. Picking
+    "Found help elsewhere" asks whether we may invite that contractor to join;
+    a yes needs their name and contact."""
+    reason = forms.ChoiceField(
+        choices=Task.REMOVAL_REASON_CHOICES, widget=forms.RadioSelect,
+        label='Why are you deleting this task?',
+        error_messages={'required': 'Please choose a reason.'},
+    )
+    invite_contractor = forms.ChoiceField(
+        choices=[('yes', 'Yes'), ('no', 'No')], widget=forms.RadioSelect, required=False,
+        label='Would you be happy for us to invite them to join The Coconut Wireless Network?',
+    )
+    contractor_name = forms.CharField(
+        max_length=150, required=False, label="Contractor's name",
+        widget=_input('e.g. Joe Ratu or Ratu Builders'),
+    )
+    contractor_contact = forms.CharField(
+        max_length=150, required=False, label="Contractor's phone or email",
+        widget=_input('e.g. 912 3456 or joe@example.fj'),
+    )
+
+    def clean(self):
+        cd = super().clean()
+        if cd.get('reason') != Task.REMOVAL_FOUND_ELSEWHERE:
+            cd['invite_contractor'] = ''
+            return cd
+        invite = cd.get('invite_contractor')
+        if not invite:
+            self.add_error('invite_contractor', 'Please choose yes or no.')
+        elif invite == 'yes':
+            if not (cd.get('contractor_name') or '').strip():
+                self.add_error('contractor_name', "Please enter the contractor's name.")
+            if not (cd.get('contractor_contact') or '').strip():
+                self.add_error('contractor_contact', 'Please enter a phone number or email.')
+        return cd
+
+
 class TaskDateForm(forms.ModelForm):
     """Lets a client change an already-posted task's schedule without
     reopening the full post-task form."""
