@@ -29,7 +29,12 @@ main{display:flex;align-items:center;justify-content:center;padding:36px 20px;mi
 <main>
   <div class="reg-wrap">
     <h1>Create your account</h1>
-    <p class="sub">Already have one? <a href="{% url 'login' %}">Log in here</a></p>
+    <p class="sub">Already have one? <a href="{% url 'login' %}{% if request.GET.next %}?next={{ request.GET.next|urlencode }}{% endif %}">Log in here</a></p>
+    {% if request.GET.next %}
+    <div class="card" style="margin-bottom:14px;border:1px solid #cce4ef;background:var(--blue-light);">
+      🔒 Create a free account or log in to continue. It only takes a minute.
+    </div>
+    {% endif %}
     {% if closed_beta_enabled and beta_gate_clients %}
     <div class="card" style="margin-bottom:14px;border:1px solid #ffe2a8;background:#fffaf0;">
       Closed beta access is invite-only. Use your approved email to register.

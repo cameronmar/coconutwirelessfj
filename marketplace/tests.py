@@ -1898,10 +1898,31 @@ class MigrateSupplierToTradieAdminTests(TestCase):
         data.update(extra)
         return self.client.post(self.url, data, secure=True)
 
-    def test_migrate_link_shown_for_supplier(self):
-        from . import admin as marketplace_admin
-        model_admin = marketplace_admin.UserAdmin(User, marketplace_admin.admin.site)
-        self.assertIn(self.url, model_admin.migrate_link(self.supplier_user))
+    def test_supplier_profiles_dropdown_action_opens_migrate_page(self):
+        response = self.client.post(
+            reverse('admin:marketplace_supplierprofile_changelist'),
+            {'action': 'migrate_to_local_pro', '_selected_action': [self.supplier.pk]}, secure=True,
+        )
+        self.assertRedirects(response, self.url, fetch_redirect_response=False)
+
+    def test_users_dropdown_action_opens_migrate_page(self):
+        response = self.client.post(
+            reverse('admin:marketplace_user_changelist'),
+            {'action': 'migrate_to_local_pro', '_selected_action': [self.supplier_user.pk]}, secure=True,
+        )
+        self.assertRedirects(response, self.url, fetch_redirect_response=False)
+
+    def test_dropdown_action_needs_exactly_one_account(self):
+        other = User.objects.create_user(email='other-sup@example.com', password='pass12345', role=User.ROLE_SUPPLIER)
+        other_profile = SupplierProfile.objects.create(user=other)
+        response = self.client.post(
+            reverse('admin:marketplace_supplierprofile_changelist'),
+            {'action': 'migrate_to_local_pro', '_selected_action': [self.supplier.pk, other_profile.pk]}, secure=True,
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertNotEqual(response.url, self.url)
+        self.supplier_user.refresh_from_db()
+        self.assertEqual(self.supplier_user.role, User.ROLE_SUPPLIER)
 
     def test_move_and_take_off_supplier_side(self):
         from . import workspaces
@@ -2059,10 +2080,14 @@ class BetaFeatureGatingTests(TestCase):
             first_name='Staff', last_name='Member', is_staff=True, town='Suva',
         )
 
-    def test_anonymous_visitor_gets_404_on_gated_urls(self):
-        for url in self.anon_urls:
-            response = self.client.get(url, secure=True)
-            self.assertEqual(response.status_code, 404, url)
+    def test_anonymous_visitor_cannot_reach_gated_urls(self):
+        # Supplier sign-up is a public page, so the beta gate's 404 applies.
+        response = self.client.get(reverse('register_supplier'), secure=True)
+        self.assertEqual(response.status_code, 404)
+        # Everything else is behind SignupRequiredMiddleware first.
+        response = self.client.get(reverse('browse_suppliers'), secure=True)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(reverse('register_client'), response.url)
 
     def test_regular_authenticated_user_gets_404(self):
         self.client.login(username='regular@example.com', password='Password123')
@@ -2081,6 +2106,8 @@ class BetaFeatureGatingTests(TestCase):
 
     @override_settings(SUPPLIERS_ENABLED=True)
     def test_flag_on_opens_it_for_everyone(self):
+        self.assertEqual(self.client.get(reverse('register_supplier'), secure=True).status_code, 200)
+        self.client.login(username='regular@example.com', password='Password123')
         response = self.client.get(reverse('browse_suppliers'), secure=True)
         self.assertEqual(response.status_code, 200)
 
@@ -2718,7 +2745,7 @@ class AccountDeletionTests(TestCase):
     def test_delete_account_requires_login(self):
         response = self.client.get(reverse('delete_account'), secure=True)
         self.assertEqual(response.status_code, 302)
-        self.assertIn(reverse('login'), response.url)
+        self.assertIn(reverse('register_client'), response.url)
 
     def test_wrong_password_rejected(self):
         self.client.login(username=self.user.email, password='pass12345')
@@ -3688,7 +3715,7 @@ class AddRoleViewTests(TestCase):
     def test_add_role_tradie_requires_login(self):
         response = self.client.get(reverse('add_role_tradie'), secure=True)
         self.assertEqual(response.status_code, 302)
-        self.assertIn(reverse('login'), response.url)
+        self.assertIn(reverse('register_client'), response.url)
 
     def test_add_role_tradie_rejects_if_already_a_tradie(self):
         TradieProfile.objects.create(user=self.user, trades=['cleaning'], service_towns=['Suva'])
@@ -3855,7 +3882,7 @@ class AccountMergeTests(TestCase):
     def test_merge_view_requires_login(self):
         response = self.client.get(reverse('merge_account'), secure=True)
         self.assertEqual(response.status_code, 302)
-        self.assertIn(reverse('login'), response.url)
+        self.assertIn(reverse('register_client'), response.url)
 
     def test_merge_view_happy_path(self):
         self.client.login(username=self.user_a.email, password='pass-a-12345')
@@ -3953,7 +3980,7 @@ class SwitchTabTests(TestCase):
             reverse('switch_tab'), {'target_user_id': self.user_b.pk, 'target_role': 'tradie'}, secure=True,
         )
         self.assertEqual(response.status_code, 302)
-        self.assertIn(reverse('login'), response.url)
+        self.assertIn(reverse('register_client'), response.url)
 
     def test_switch_tab_to_linked_account_logs_in_as_target(self):
         self.client.login(username=self.user_a.email, password='pass-a-12345')
@@ -4409,3 +4436,42 @@ class GoogleLoginTests(TestCase):
     def test_no_pending_signup_redirects_to_login(self):
         response = self.client.get(reverse('google_signup_complete'), secure=True)
         self.assertRedirects(response, reverse('login'), fetch_redirect_response=False)
+
+
+class SignupRequiredMiddlewareTests(TestCase):
+    def test_public_pages_open_without_account(self):
+        for name in ('home', 'how_it_works', 'contact_support', 'privacy', 'terms',
+                     'child_safety', 'register_client', 'register_tradie', 'login'):
+            response = self.client.get(reverse(name), secure=True)
+            self.assertNotEqual(response.status_code, 302, f'{name} should be public')
+
+    def test_features_send_logged_out_visitor_to_signup(self):
+        for path in ('/tasks/', '/professionals/', '/market/', '/tasks/post/', '/dashboard/', '/messages/'):
+            response = self.client.get(path + '?q=x', secure=True)
+            self.assertRedirects(
+                response, reverse('register_client') + '?next=' + path.replace('/', '%2F') + '%3Fq%3Dx',
+                fetch_redirect_response=False,
+            )
+
+    def test_signup_page_shows_continue_banner_and_keeps_next_on_login_link(self):
+        response = self.client.get(reverse('register_client') + '?next=/tasks/', secure=True)
+        self.assertContains(response, 'Create a free account or log in to continue')
+        self.assertContains(response, reverse('login') + '?next=/tasks/')
+
+    def test_logged_in_user_is_not_gated(self):
+        user = User.objects.create_user(email='gate@example.com', password='pass12345', role=User.ROLE_CLIENT)
+        self.client.force_login(user)
+        response = self.client.get('/tasks/', secure=True)
+        self.assertNotEqual(response.get('Location', ''), reverse('register_client') + '?next=%2Ftasks%2F')
+
+    def test_unknown_url_still_404s(self):
+        self.assertEqual(self.client.get('/no-such-page/', secure=True).status_code, 404)
+
+    def test_login_ignores_offsite_next(self):
+        User.objects.create_user(email='nxt@example.com', password='pass12345', role=User.ROLE_CLIENT)
+        response = self.client.post(
+            reverse('login') + '?next=https://evil.example.com/',
+            {'email': 'nxt@example.com', 'password': 'pass12345'}, secure=True,
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertNotIn('evil.example.com', response['Location'])

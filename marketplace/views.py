@@ -653,6 +653,8 @@ def register_client(request):
         login(request, user)
         send_welcome_notice(user)
         flash.success(request, f'Bula, {user.first_name}! Your client account is ready.')
+        if request.GET.get('next'):
+            return redirect(_safe_google_redirect(request, request.GET['next']))
         return redirect('client_dashboard')
     if request.method == 'POST' and getattr(form, 'under_age_rejected', False):
         request.session['age_gate_failed_at'] = timezone.now().isoformat()
@@ -759,8 +761,9 @@ def login_view(request):
             # the app to read/reply to what the notification was about does.
             request.session.set_expiry(0 if not cd.get('remember_me') else None)
             cache.delete(limit_key)
-            nxt = request.GET.get('next', '')
-            return redirect(nxt or 'dashboard')
+            # Same host-checked fallback as Google sign-in, so ?next= can't
+            # bounce someone to an outside site after logging in.
+            return redirect(_safe_google_redirect(request, request.GET.get('next', '')))
         else:
             try:
                 cache.incr(limit_key)
