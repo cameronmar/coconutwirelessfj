@@ -194,7 +194,7 @@ class UserAdmin(BaseUserAdmin):
         user is emailed telling them to log back in on the local pro side.
 
         For suppliers, business name, bio, service towns, TIN and TIN letter
-        are carried over from the SupplierProfile, and the admin chooses
+        or card are carried over from the SupplierProfile, and the admin chooses
         whether to take them off the supplier side. Taking them off marks
         the SupplierProfile VERIFICATION_MOVED and deactivates the supplier
         workspace rather than deleting anything, so past enquiries, quotes
@@ -392,6 +392,7 @@ class TradieProfileAdmin(CategoryBulkActionsMixin, admin.ModelAdmin):
         'public_liability_insurance_link',
         'electrical_contractors_licence_link',
         'plumber_licence_link',
+        'aircon_licence_link',
     ]
     fieldsets = (
         ('Business Details',  {'fields': ('user', 'business_name', 'tin', 'years_experience')}),
@@ -402,12 +403,13 @@ class TradieProfileAdmin(CategoryBulkActionsMixin, admin.ModelAdmin):
             'public_liability_insurance', 'public_liability_insurance_link',
             'electrical_contractors_licence', 'electrical_contractors_licence_link',
             'plumber_licence', 'plumber_licence_link',
+            'aircon_licence', 'aircon_licence_link',
         )}),
         ('Approval Status', {'fields': ('verification_status', 'documents_verified')}),
         ('Safety Document Review', {'fields': ('safety_documents_reviewed',), 'description': (
-            'Electrical and Plumbing are safety-critical trades — tradies with either trade selected '
+            'Electrical, Plumbing and Air Conditioning are safety-critical trades — tradies with any of these selected '
             "can't bid on jobs until this is ticked on, regardless of their overall verification status. "
-            'Review their Electrical Contractors Licence / Plumber Licence above before enabling.'
+            'Review their Electrical Contractors Licence / Plumber Licence / Air Conditioning Licence above before enabling.'
         )}),
         ('Founding Member', {'fields': ('is_founding_member', 'founding_member_credit_balance')}),
         ('Notes',            {'fields': ('verification_notes',)}),
@@ -421,13 +423,13 @@ class TradieProfileAdmin(CategoryBulkActionsMixin, admin.ModelAdmin):
     def has_tin_letter(self, obj):
         return bool(obj.tin_letter)
     has_tin_letter.boolean = True
-    has_tin_letter.short_description = 'TIN letter'
+    has_tin_letter.short_description = 'TIN letter/card'
 
     def needs_safety_review_display(self, obj):
         if not obj.requires_safety_document_review():
             return '—'
         return '✅ Reviewed' if obj.safety_documents_reviewed else '⏳ Needs review'
-    needs_safety_review_display.short_description = 'Safety docs (Electrical/Plumbing)'
+    needs_safety_review_display.short_description = 'Safety docs (Electrical/Plumbing/Aircon)'
 
     def mark_safety_documents_reviewed(self, request, queryset):
         updated = queryset.update(safety_documents_reviewed=True)
@@ -441,8 +443,8 @@ class TradieProfileAdmin(CategoryBulkActionsMixin, admin.ModelAdmin):
         return '—'
 
     def tin_letter_link(self, obj):
-        return self._doc_link(obj.tin_letter, 'TIN Letter')
-    tin_letter_link.short_description = 'TIN Letter (view)'
+        return self._doc_link(obj.tin_letter, 'TIN Letter or Card')
+    tin_letter_link.short_description = 'TIN Letter or Card (view)'
 
     def business_licence_link(self, obj):
         return self._doc_link(obj.business_licence, 'Business Licence')
@@ -459,6 +461,10 @@ class TradieProfileAdmin(CategoryBulkActionsMixin, admin.ModelAdmin):
     def plumber_licence_link(self, obj):
         return self._doc_link(obj.plumber_licence, 'Plumber Licence')
     plumber_licence_link.short_description = 'Plumber Licence (view)'
+
+    def aircon_licence_link(self, obj):
+        return self._doc_link(obj.aircon_licence, 'Air Conditioning / Refrigeration Licence')
+    aircon_licence_link.short_description = 'Air Conditioning Licence (view)'
 
 
 # ── Workspaces (multi-workspace accounts) ────────────────────────────────────

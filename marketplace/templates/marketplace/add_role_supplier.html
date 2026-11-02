@@ -113,12 +113,12 @@
         <p style="font-size:.85rem;color:var(--muted);margin:0 0 16px;">Documents are reviewed by our team before your profile is approved. PDF or image files accepted (max 10MB each).</p>
 
         <div class="field">
-          <label>TIN Letter{% if not form.reused_tin_letter %} <span class="required-badge">Required</span>{% endif %}</label>
+          <label>TIN Letter or Card{% if not form.reused_tin_letter %} <span class="required-badge">Required</span>{% endif %}</label>
           <div class="upload-field">
             {{ form.tin_letter }}
             <div class="hint">{{ form.tin_letter.help_text }}</div>
           </div>
-          {% if form.reused_tin_letter %}<div class="reuse-band">✅ We'll reuse the TIN letter already on file for your local pro account unless you upload a new one.</div>{% endif %}
+          {% if form.reused_tin_letter %}<div class="reuse-band">✅ We'll reuse the TIN letter or card already on file for your local pro account unless you upload a new one.</div>{% endif %}
           {% for e in form.tin_letter.errors %}<div class="field-error">{{e}}</div>{% endfor %}
         </div>
 
