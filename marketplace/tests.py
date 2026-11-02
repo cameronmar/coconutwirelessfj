@@ -867,7 +867,7 @@ class TradieProfileDoesNotExposeDocumentsTests(TestCase):
         content = template_path.read_text(encoding='utf-8')
         for forbidden in (
             'tin_letter.url', 'business_licence.url', 'public_liability_insurance.url',
-            'electrical_contractors_licence.url', 'plumber_licence.url', 'profile.tin }}',
+            'electrical_contractors_licence.url', 'plumber_licence.url', 'aircon_licence.url', 'profile.tin }}',
         ):
             self.assertNotIn(forbidden, content, f'{forbidden!r} must not appear in tradie_profile.html — it is a public page.')
 
@@ -1640,6 +1640,19 @@ class VerificationDocumentUploadValidationTests(TestCase):
         good_file = SimpleUploadedFile('tin.pdf', b'%PDF-1.4 fake pdf content', content_type='application/pdf')
         form = TradieRegistrationForm(data=self._base_post_data(), files={'tin_letter': good_file})
         self.assertNotIn('tin_letter', form.errors)
+
+    def test_aircon_licence_disallowed_file_type_is_rejected(self):
+        from .forms import TradieRegistrationForm
+        bad_file = SimpleUploadedFile('licence.exe', b'not really a pdf', content_type='application/octet-stream')
+        form = TradieRegistrationForm(data=self._base_post_data(), files={'aircon_licence': bad_file})
+        self.assertFalse(form.is_valid())
+        self.assertIn('aircon_licence', form.errors)
+
+    def test_register_page_offers_aircon_licence_upload(self):
+        response = self.client.get(reverse('register_tradie'), secure=True)
+        self.assertContains(response, 'id="aircon-licence-field"')
+        self.assertContains(response, 'name="aircon_licence"')
+        self.assertContains(response, 'TIN Letter or Card')
 
 
 class RateLimitingTests(TestCase):
@@ -2789,6 +2802,14 @@ class AccountDeletionTests(TestCase):
         self.assertEqual(self.profile.bio, '')
         self.assertFalse(self.profile.tin_letter)
 
+    def test_deletion_removes_aircon_licence(self):
+        self.profile.aircon_licence = SimpleUploadedFile('licence.pdf', b'pdf-bytes', content_type='application/pdf')
+        self.profile.save()
+        self.client.login(username=self.user.email, password='pass12345')
+        self.client.post(reverse('delete_account'), {'password': 'pass12345', 'confirm': 'on'}, secure=True)
+        self.profile.refresh_from_db()
+        self.assertFalse(self.profile.aircon_licence)
+
     def test_deletion_logs_the_user_out(self):
         self.client.login(username=self.user.email, password='pass12345')
         self.client.post(reverse('delete_account'), {'password': 'pass12345', 'confirm': 'on'}, secure=True)
@@ -3364,7 +3385,7 @@ class WorkspaceWiringIntegrationTests(TestCase):
             first_name='Wire', last_name='Tradie', role=User.ROLE_TRADIE, town='Suva',
         )
         self.tradie_profile = TradieProfile.objects.create(
-            # Not 'electrical'/'plumbing' — those are safety-critical trades
+            # Not 'electrical'/'plumbing'/'aircon' — those are safety-critical trades
             # that also require safety_documents_reviewed=True to quote,
             # independent of verification_status (see can_quote()).
             user=self.tradie_user, trades=['carpentry'], service_towns=['Suva'],
@@ -3648,6 +3669,28 @@ class AddRoleFormTests(TestCase):
         form = AddTradieRoleForm(data=self._base_tradie_data(), files={}, user=self.user)
         self.assertFalse(form.is_valid())
         self.assertIn('tin_letter', form.errors)
+
+    def test_aircon_tradie_cannot_bid_until_licence_is_reviewed(self):
+        from .forms import AddTradieRoleForm
+        form = AddTradieRoleForm(
+            data=self._base_tradie_data(trades=['aircon']),
+            files={
+                'tin_letter': SimpleUploadedFile('tin.pdf', b'%PDF-1.4', content_type='application/pdf'),
+                'aircon_licence': SimpleUploadedFile('licence.pdf', b'%PDF-1.4', content_type='application/pdf'),
+            },
+            user=self.user,
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        form.save()
+        profile = self.user.tradie_profile
+        self.assertTrue(profile.aircon_licence)
+        self.assertTrue(profile.requires_safety_document_review())
+        self.assertFalse(profile.can_quote())
+        self.assertIn('Air Conditioning', profile.quote_block_reason())
+        profile.safety_documents_reviewed = True
+        profile.save()
+        self.assertTrue(profile.can_quote())
+        self.assertEqual(profile.quote_block_reason(), '')
 
     def test_happy_path_creates_profile_and_workspace(self):
         from .forms import AddTradieRoleForm

@@ -130,10 +130,10 @@
         <p style="font-size:.85rem;color:var(--muted);margin:0 0 16px;">Documents are reviewed by our team before your profile is approved. PDF or image files accepted (max 10MB each).</p>
 
         <div class="field">
-          <label>TIN Letter <span class="required-badge">Required</span></label>
+          <label>TIN Letter or Card <span class="required-badge">Required</span></label>
           <div class="upload-field">
             {{ form.tin_letter }}
-            <div class="hint">Upload your FRCA Tax Identification Number letter (PDF, JPG, or PNG).</div>
+            <div class="hint">Upload your FRCA Tax Identification Number letter or card (PDF, JPG, or PNG).</div>
           </div>
           {% for e in form.tin_letter.errors %}<div class="field-error">{{e}}</div>{% endfor %}
         </div>

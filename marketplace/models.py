@@ -206,11 +206,12 @@ class TradieProfile(models.Model):
     service_towns   = models.JSONField(default=list)        # list of town keys from TOWN_CHOICES
 
     # Provider verification documents
-    tin_letter                    = models.FileField(upload_to='provider_documents/', blank=True, verbose_name='TIN Letter')
+    tin_letter                    = models.FileField(upload_to='provider_documents/', blank=True, verbose_name='TIN Letter or Card')
     business_licence              = models.FileField(upload_to='provider_documents/', blank=True, verbose_name='Business Licence')
     public_liability_insurance    = models.FileField(upload_to='provider_documents/', blank=True, verbose_name='Public Liability Insurance')
     electrical_contractors_licence = models.FileField(upload_to='provider_documents/', blank=True, verbose_name='Electrical Contractors Licence')
     plumber_licence               = models.FileField(upload_to='provider_documents/', blank=True, verbose_name='Plumber Licence')
+    aircon_licence                = models.FileField(upload_to='provider_documents/', blank=True, verbose_name='Air Conditioning / Refrigeration Licence')
     verification_status           = models.CharField(
         max_length=20,
         choices=VERIFICATION_STATUS_CHOICES,
@@ -220,13 +221,13 @@ class TradieProfile(models.Model):
     documents_verified            = models.BooleanField(default=False, verbose_name='Documents verified by admin')
     verification_notes            = models.TextField(blank=True, verbose_name='Verification notes (admin only)')
 
-    # Electrical/Plumbing are safety-critical trades — those tradies can
+    # Electrical/Plumbing/Aircon are safety-critical trades — those tradies can
     # register without their licence documents (rather than being blocked at
     # signup), but can't bid on any job until an admin has reviewed those
     # documents and ticked this on, regardless of overall verification_status.
     safety_documents_reviewed     = models.BooleanField(
         default=False,
-        verbose_name='Safety documents reviewed (Electrical/Plumbing licence)',
+        verbose_name='Safety documents reviewed (Electrical/Plumbing/Air Conditioning licence)',
     )
 
     # Founding member program — first 20 tradies get a badge + FJD $200 platform
@@ -254,7 +255,7 @@ class TradieProfile(models.Model):
         used to pick the right tone/wording in the UI)."""
         return self.verification_status in (self.VERIFICATION_REJECTED, self.VERIFICATION_SUSPENDED)
 
-    SAFETY_CRITICAL_TRADES = {'electrical', 'plumbing'}
+    SAFETY_CRITICAL_TRADES = {'electrical', 'plumbing', 'aircon'}
 
     def requires_safety_document_review(self):
         return bool(set(self.trades or []) & self.SAFETY_CRITICAL_TRADES)
@@ -262,8 +263,8 @@ class TradieProfile(models.Model):
     def can_quote(self):
         """Pending tradies may browse and quote while awaiting verification —
         only rejected/suspended accounts are blocked. Clients see a pending
-        badge on their profile and quotes in the meantime. Electrical/Plumbing
-        tradies are an exception on top of that: safety-critical work, so they
+        badge on their profile and quotes in the meantime. Electrical/Plumbing/
+        Aircon tradies are an exception on top of that: safety-critical work, so they
         can't bid at all until their licence documents are specifically
         reviewed, independent of overall verification_status."""
         if self.verification_status not in (self.VERIFICATION_PENDING, self.VERIFICATION_APPROVED):
@@ -283,7 +284,7 @@ class TradieProfile(models.Model):
             return 'Your local professional account is suspended. Please contact support.'
         if self.requires_safety_document_review() and not self.safety_documents_reviewed:
             return (
-                'Electrical and Plumbing work is safety-critical, so we need to review your licence '
+                'Electrical, Plumbing and Air Conditioning work is safety-critical, so we need to review your licence '
                 "documents before you can bid on jobs. If you haven't already sent them, please "
                 'contact support — our team will review them and enable bidding shortly.'
             )
@@ -1838,7 +1839,7 @@ class SupplierProfile(models.Model):
     supply_categories = models.JSONField(default=list)
     service_towns     = models.JSONField(default=list)
 
-    tin_letter             = models.FileField(upload_to='supplier_documents/', blank=True, null=True)
+    tin_letter             = models.FileField(upload_to='supplier_documents/', blank=True, null=True, verbose_name='TIN Letter or Card')
     business_registration  = models.FileField(upload_to='supplier_documents/', blank=True, null=True)
     import_export_licence  = models.FileField(upload_to='supplier_documents/', blank=True, null=True)
 

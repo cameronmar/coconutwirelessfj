@@ -138,10 +138,10 @@
         <p style="font-size:.85rem;color:var(--muted);margin:0 0 16px;">Documents are reviewed by our team before your profile is approved. PDF or image files accepted.</p>
 
         <div class="field">
-          <label>TIN Letter <span class="required-badge">Required</span></label>
+          <label>TIN Letter or Card <span class="required-badge">Required</span></label>
           <div class="upload-field">
             {{ form.tin_letter }}
-            <div class="hint">Upload your FRCA Tax Identification Number letter.</div>
+            <div class="hint">Upload your FRCA Tax Identification Number letter or card.</div>
           </div>
           {% for e in form.tin_letter.errors %}<div class="field-error">{{e}}</div>{% endfor %}
         </div>
@@ -179,6 +179,15 @@
           <div class="hint">Plumbing work is safety-critical — you can register without it, but your account can't bid on jobs until our team has reviewed it.</div>
           {% for e in form.plumber_licence.errors %}<div class="field-error">{{e}}</div>{% endfor %}
         </div>
+
+        <div class="field conditional-doc" id="aircon-licence-field">
+          <label>Air Conditioning / Refrigeration Licence <span class="required-badge">Needed before you can bid</span></label>
+          <div class="upload-field">
+            {{ form.aircon_licence }}
+          </div>
+          <div class="hint">Air conditioning work is safety-critical — you can register without it, but your account can't bid on jobs until our team has reviewed it.</div>
+          {% for e in form.aircon_licence.errors %}<div class="field-error">{{e}}</div>{% endfor %}
+        </div>
       </div>
 
       {% if form.non_field_errors %}<div class="field-error" style="margin-bottom:12px;">{{ form.non_field_errors }}</div>{% endif %}
@@ -212,11 +221,13 @@
   var grid = document.getElementById('trades-grid');
   var elField = document.getElementById('electrical-licence-field');
   var plField = document.getElementById('plumber-licence-field');
+  var acField = document.getElementById('aircon-licence-field');
 
   function update() {
     var checked = Array.from(grid.querySelectorAll('input[type=checkbox]:checked')).map(function(c){return c.value;});
     elField.style.display = checked.indexOf('electrical') !== -1 ? 'block' : 'none';
     plField.style.display = checked.indexOf('plumbing') !== -1 ? 'block' : 'none';
+    acField.style.display = checked.indexOf('aircon') !== -1 ? 'block' : 'none';
   }
 
   grid.addEventListener('change', update);

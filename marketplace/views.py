@@ -199,7 +199,7 @@ def _require_quoting_tradie(request):
     """Gate for actions that place a quote/appointment request. Pending
     tradies are allowed through (they can quote while awaiting verification —
     clients see a pending badge) — only rejected/suspended accounts, and
-    Electrical/Plumbing tradies whose safety documents haven't been reviewed
+    Electrical/Plumbing/Aircon tradies whose safety documents haven't been reviewed
     yet, are blocked. See TradieProfile.can_quote()/quote_block_reason()."""
     if not request.user.is_authenticated:
         raise PermissionDenied
@@ -1988,7 +1988,7 @@ def delete_account(request):
                 profile.tin = ''
                 profile.bio = ''
                 for field_name in ('tin_letter', 'business_licence', 'public_liability_insurance',
-                                    'electrical_contractors_licence', 'plumber_licence'):
+                                    'electrical_contractors_licence', 'plumber_licence', 'aircon_licence'):
                     file_field = getattr(profile, field_name)
                     if file_field:
                         file_field.delete(save=False)

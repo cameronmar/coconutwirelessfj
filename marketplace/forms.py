@@ -194,11 +194,12 @@ class TradieRegistrationForm(forms.Form):
     trades           = forms.MultipleChoiceField(choices=[], widget=forms.CheckboxSelectMultiple)
     service_towns    = forms.MultipleChoiceField(choices=TOWN_CHOICES, widget=forms.CheckboxSelectMultiple)
     # Verification documents
-    tin_letter                    = forms.FileField(label='TIN Letter', help_text='Upload your FRCA TIN letter (PDF, JPG, or PNG, up to 10MB). Required.')
+    tin_letter                    = forms.FileField(label='TIN Letter or Card', help_text='Upload your FRCA TIN letter or card (PDF, JPG, or PNG, up to 10MB). Required.')
     business_licence              = forms.FileField(label='Business Licence', required=False, help_text='Optional.')
     public_liability_insurance    = forms.FileField(label='Public Liability Insurance', required=False, help_text='Optional.')
     electrical_contractors_licence = forms.FileField(label='Electrical Contractors Licence', required=False, help_text="Electrical work is safety-critical — upload this now if you have it. If not, you can still register, but your account won't be able to bid on jobs until our team has reviewed it.")
     plumber_licence               = forms.FileField(label='Plumber Licence', required=False, help_text="Plumbing work is safety-critical — upload this now if you have it. If not, you can still register, but your account won't be able to bid on jobs until our team has reviewed it.")
+    aircon_licence                = forms.FileField(label='Air Conditioning / Refrigeration Licence', required=False, help_text="Air conditioning work is safety-critical — upload this now if you have it. If not, you can still register, but your account won't be able to bid on jobs until our team has reviewed it.")
     # Terms acceptance
     accepted_terms                = forms.BooleanField(
         required=True,
@@ -246,6 +247,9 @@ class TradieRegistrationForm(forms.Form):
     def clean_plumber_licence(self):
         return _clean_verification_document(self.cleaned_data.get('plumber_licence'))
 
+    def clean_aircon_licence(self):
+        return _clean_verification_document(self.cleaned_data.get('aircon_licence'))
+
     def clean(self):
         cd = super().clean()
         p1, p2 = cd.get('password'), cd.get('password_confirm')
@@ -285,7 +289,7 @@ class TradieRegistrationForm(forms.Form):
                 founding_member_credit_balance=Decimal(FOUNDING_MEMBER_CREDIT) if is_founder else Decimal('0.00'),
             )
             for field in ('tin_letter', 'business_licence', 'public_liability_insurance',
-                          'electrical_contractors_licence', 'plumber_licence'):
+                          'electrical_contractors_licence', 'plumber_licence', 'aircon_licence'):
                 if cd.get(field):
                     setattr(profile, field, cd[field])
             profile.save()
@@ -1087,7 +1091,7 @@ class SupplierRegistrationForm(forms.Form):
     bio              = forms.CharField(required=False, widget=forms.Textarea(attrs={'class': 'form-input', 'rows': 4, 'placeholder': 'Describe your business, the products you supply, and your service area…'}))
     supply_categories = forms.MultipleChoiceField(choices=[], widget=forms.CheckboxSelectMultiple)
     service_towns     = forms.MultipleChoiceField(choices=TOWN_CHOICES, widget=forms.CheckboxSelectMultiple)
-    tin_letter                = forms.FileField(label='TIN Letter', help_text='Upload your FRCA TIN letter (PDF, JPG, or PNG, up to 10MB). Required.')
+    tin_letter                = forms.FileField(label='TIN Letter or Card', help_text='Upload your FRCA TIN letter or card (PDF, JPG, or PNG, up to 10MB). Required.')
     business_registration     = forms.FileField(label='Business Registration', required=False, help_text='Optional.')
     import_export_licence     = forms.FileField(label='Import/Export Licence', required=False, help_text='Optional.')
     accepted_terms            = forms.BooleanField(
@@ -1239,11 +1243,12 @@ class AddTradieRoleForm(forms.Form):
     bio              = forms.CharField(widget=forms.Textarea(attrs={'class': 'form-input', 'rows': 4, 'placeholder': 'Tell clients about your experience, specialties and work area…'}))
     trades           = forms.MultipleChoiceField(choices=[], widget=forms.CheckboxSelectMultiple)
     service_towns    = forms.MultipleChoiceField(choices=TOWN_CHOICES, widget=forms.CheckboxSelectMultiple)
-    tin_letter                     = forms.FileField(label='TIN Letter', required=False, help_text='Upload your FRCA TIN letter (PDF, JPG, or PNG, up to 10MB).')
+    tin_letter                     = forms.FileField(label='TIN Letter or Card', required=False, help_text='Upload your FRCA TIN letter or card (PDF, JPG, or PNG, up to 10MB).')
     business_licence               = forms.FileField(label='Business Licence', required=False, help_text='Optional.')
     public_liability_insurance     = forms.FileField(label='Public Liability Insurance', required=False, help_text='Optional.')
     electrical_contractors_licence = forms.FileField(label='Electrical Contractors Licence', required=False, help_text="Electrical work is safety-critical — upload this now if you have it. If not, you can still register, but your account won't be able to bid on jobs until our team has reviewed it.")
     plumber_licence                = forms.FileField(label='Plumber Licence', required=False, help_text="Plumbing work is safety-critical — upload this now if you have it. If not, you can still register, but your account won't be able to bid on jobs until our team has reviewed it.")
+    aircon_licence                 = forms.FileField(label='Air Conditioning / Refrigeration Licence', required=False, help_text="Air conditioning work is safety-critical — upload this now if you have it. If not, you can still register, but your account won't be able to bid on jobs until our team has reviewed it.")
     accepted_platform_circumvention = forms.BooleanField(
         required=True,
         error_messages={'required': 'You must acknowledge the Platform Circumvention Fee policy.'}
@@ -1268,7 +1273,7 @@ class AddTradieRoleForm(forms.Form):
         else:
             self.reused_tin_letter = False
         if self.reused_tin_letter:
-            self.fields['tin_letter'].help_text = "We'll reuse the TIN letter already on file for your supplier account, or upload a new one."
+            self.fields['tin_letter'].help_text = "We'll reuse the TIN letter or card already on file for your supplier account, or upload a new one."
         # Google-only accounts (SocialAccount, no usable password) have
         # nothing to re-enter here — a fresh verified Google token already
         # proved identity for this session, same reasoning as staff linking
@@ -1307,10 +1312,13 @@ class AddTradieRoleForm(forms.Form):
     def clean_plumber_licence(self):
         return _clean_verification_document(self.cleaned_data.get('plumber_licence'))
 
+    def clean_aircon_licence(self):
+        return _clean_verification_document(self.cleaned_data.get('aircon_licence'))
+
     def clean(self):
         cd = super().clean()
         if not cd.get('tin_letter') and not self.reused_tin_letter:
-            self.add_error('tin_letter', 'Upload your TIN letter, or add a supplier account first so we can reuse it.')
+            self.add_error('tin_letter', 'Upload your TIN letter or card, or add a supplier account first so we can reuse it.')
         return cd
 
     def save(self):
@@ -1334,7 +1342,7 @@ class AddTradieRoleForm(forms.Form):
                 founding_member_credit_balance=Decimal(FOUNDING_MEMBER_CREDIT) if is_founder else Decimal('0.00'),
             )
             for field in ('business_licence', 'public_liability_insurance',
-                          'electrical_contractors_licence', 'plumber_licence'):
+                          'electrical_contractors_licence', 'plumber_licence', 'aircon_licence'):
                 if cd.get(field):
                     setattr(profile, field, cd[field])
             if cd.get('tin_letter'):
@@ -1366,7 +1374,7 @@ class AddSupplierRoleForm(forms.Form):
     bio               = forms.CharField(required=False, widget=forms.Textarea(attrs={'class': 'form-input', 'rows': 4, 'placeholder': 'Describe your business, the products you supply, and your service area…'}))
     supply_categories = forms.MultipleChoiceField(choices=[], widget=forms.CheckboxSelectMultiple)
     service_towns     = forms.MultipleChoiceField(choices=TOWN_CHOICES, widget=forms.CheckboxSelectMultiple)
-    tin_letter                = forms.FileField(label='TIN Letter', required=False, help_text='Upload your FRCA TIN letter (PDF, JPG, or PNG, up to 10MB).')
+    tin_letter                = forms.FileField(label='TIN Letter or Card', required=False, help_text='Upload your FRCA TIN letter or card (PDF, JPG, or PNG, up to 10MB).')
     business_registration     = forms.FileField(label='Business Registration', required=False, help_text='Optional.')
     import_export_licence     = forms.FileField(label='Import/Export Licence', required=False, help_text='Optional.')
 
@@ -1385,7 +1393,7 @@ class AddSupplierRoleForm(forms.Form):
         else:
             self.reused_tin_letter = False
         if self.reused_tin_letter:
-            self.fields['tin_letter'].help_text = "We'll reuse the TIN letter already on file for your local pro account, or upload a new one."
+            self.fields['tin_letter'].help_text = "We'll reuse the TIN letter or card already on file for your local pro account, or upload a new one."
         if user and not user.has_usable_password():
             self.fields['password'].required = False
             self.fields['password'].label = 'Password'
@@ -1421,7 +1429,7 @@ class AddSupplierRoleForm(forms.Form):
         if not cd.get('service_towns'):
             raise ValidationError('Please select at least one service town.')
         if not cd.get('tin_letter') and not self.reused_tin_letter:
-            self.add_error('tin_letter', 'Upload your TIN letter, or add a local pro account first so we can reuse it.')
+            self.add_error('tin_letter', 'Upload your TIN letter or card, or add a local pro account first so we can reuse it.')
         return cd
 
     def save(self):
