@@ -50,6 +50,22 @@ def _clean_verification_document(file):
     return file
 
 
+PHOTO_ID_HELP_TEXT = (
+    "A clear photo or scan of your passport, driver's licence, voter ID card or other "
+    "government-issued photo ID (PDF, JPG, or PNG, up to 10MB). Required."
+)
+PHOTO_ID_REUSE_HELP_TEXT = "We'll use the photo ID already on file for your account, or upload a new one."
+
+
+def _photo_id_field(required=True):
+    """Shared by every signup and add-role form. User.photo_id identifies the
+    person across all their roles, so it's collected once per account."""
+    return forms.FileField(
+        label='Photo ID', required=required, help_text=PHOTO_ID_HELP_TEXT,
+        widget=forms.ClearableFileInput(attrs={'accept': '.pdf,.jpg,.jpeg,.png'}),
+    )
+
+
 def _age_from_dob(dob):
     today = date.today()
     return today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
@@ -102,6 +118,7 @@ class ClientRegistrationForm(forms.Form):
         label='I confirm my parent or guardian consents to me using this platform and to the collection of my '
               'information as described in the Privacy Policy.',
     )
+    photo_id         = _photo_id_field()
     password         = forms.CharField(widget=forms.PasswordInput(attrs={'class': 'form-input', 'placeholder': 'At least 8 characters'}))
     password_confirm = forms.CharField(label='Confirm password', widget=forms.PasswordInput(attrs={'class': 'form-input', 'placeholder': 'Repeat password'}))
     accepted_terms   = forms.BooleanField(
@@ -119,6 +136,9 @@ class ClientRegistrationForm(forms.Form):
             raise ValidationError('An account with this email already exists.')
         _validate_closed_beta_email(email, settings.BETA_GATE_CLIENT_SIGNUPS)
         return email
+
+    def clean_photo_id(self):
+        return _clean_verification_document(self.cleaned_data.get('photo_id'))
 
     def clean(self):
         cd = super().clean()
@@ -159,6 +179,7 @@ class ClientRegistrationForm(forms.Form):
                 town=cd['town'],
                 role=User.ROLE_CLIENT,
                 date_of_birth=cd['date_of_birth'],
+                photo_id=cd['photo_id'],
             )
             if is_minor:
                 user.guardian_name = cd.get('guardian_name', '').strip()
@@ -194,6 +215,7 @@ class TradieRegistrationForm(forms.Form):
     trades           = forms.MultipleChoiceField(choices=[], widget=forms.CheckboxSelectMultiple)
     service_towns    = forms.MultipleChoiceField(choices=TOWN_CHOICES, widget=forms.CheckboxSelectMultiple)
     # Verification documents
+    photo_id                      = _photo_id_field()
     tin_letter                    = forms.FileField(label='TIN Letter or Card', help_text='Upload your FRCA TIN letter or card (PDF, JPG, or PNG, up to 10MB). Required.')
     business_licence              = forms.FileField(label='Business Licence', required=False, help_text='Optional.')
     public_liability_insurance    = forms.FileField(label='Public Liability Insurance', required=False, help_text='Optional.')
@@ -232,6 +254,9 @@ class TradieRegistrationForm(forms.Form):
             "Local Professional accounts require you to be 18 or over. If you're 16 or 17 you can create a Client account.",
         )
 
+    def clean_photo_id(self):
+        return _clean_verification_document(self.cleaned_data.get('photo_id'))
+
     def clean_tin_letter(self):
         return _clean_verification_document(self.cleaned_data.get('tin_letter'))
 
@@ -269,6 +294,7 @@ class TradieRegistrationForm(forms.Form):
                 town=cd['town'],
                 role=User.ROLE_TRADIE,
                 date_of_birth=cd['date_of_birth'],
+                photo_id=cd['photo_id'],
             )
             # Lock the (singleton) PlatformSettings row as a mutex so
             # concurrent registrations can't all read the same pre-commit
@@ -450,6 +476,7 @@ class GoogleSignupCompleteForm(forms.Form):
         label='I confirm my parent or guardian consents to me using this platform and to the collection of my '
               'information as described in the Privacy Policy.',
     )
+    photo_id = _photo_id_field()
     accepted_terms = forms.BooleanField(
         required=True,
         error_messages={'required': 'You must accept the Terms & Conditions, Privacy Policy and Platform Rules to register.'}
@@ -469,6 +496,9 @@ class GoogleSignupCompleteForm(forms.Form):
         if role == self.ROLE_SUPPLIER and not self.supplier_enabled:
             raise ValidationError('Supplier signups are not available right now.')
         return role
+
+    def clean_photo_id(self):
+        return _clean_verification_document(self.cleaned_data.get('photo_id'))
 
     def clean(self):
         cd = super().clean()
@@ -1091,6 +1121,7 @@ class SupplierRegistrationForm(forms.Form):
     bio              = forms.CharField(required=False, widget=forms.Textarea(attrs={'class': 'form-input', 'rows': 4, 'placeholder': 'Describe your business, the products you supply, and your service area…'}))
     supply_categories = forms.MultipleChoiceField(choices=[], widget=forms.CheckboxSelectMultiple)
     service_towns     = forms.MultipleChoiceField(choices=TOWN_CHOICES, widget=forms.CheckboxSelectMultiple)
+    photo_id                  = _photo_id_field()
     tin_letter                = forms.FileField(label='TIN Letter or Card', help_text='Upload your FRCA TIN letter or card (PDF, JPG, or PNG, up to 10MB). Required.')
     business_registration     = forms.FileField(label='Business Registration', required=False, help_text='Optional.')
     import_export_licence     = forms.FileField(label='Import/Export Licence', required=False, help_text='Optional.')
@@ -1115,6 +1146,9 @@ class SupplierRegistrationForm(forms.Form):
             self.cleaned_data.get('date_of_birth'), User.AGE_OF_MAJORITY,
             "Supplier accounts require you to be 18 or over. If you're 16 or 17 you can create a Client account.",
         )
+
+    def clean_photo_id(self):
+        return _clean_verification_document(self.cleaned_data.get('photo_id'))
 
     def clean_tin_letter(self):
         return _clean_verification_document(self.cleaned_data.get('tin_letter'))
@@ -1148,6 +1182,7 @@ class SupplierRegistrationForm(forms.Form):
                 town=cd['town'],
                 role=User.ROLE_SUPPLIER,
                 date_of_birth=cd['date_of_birth'],
+                photo_id=cd['photo_id'],
             )
             profile = SupplierProfile(
                 user=user,
@@ -1243,6 +1278,7 @@ class AddTradieRoleForm(forms.Form):
     bio              = forms.CharField(widget=forms.Textarea(attrs={'class': 'form-input', 'rows': 4, 'placeholder': 'Tell clients about your experience, specialties and work area…'}))
     trades           = forms.MultipleChoiceField(choices=[], widget=forms.CheckboxSelectMultiple)
     service_towns    = forms.MultipleChoiceField(choices=TOWN_CHOICES, widget=forms.CheckboxSelectMultiple)
+    photo_id                       = _photo_id_field(required=False)
     tin_letter                     = forms.FileField(label='TIN Letter or Card', required=False, help_text='Upload your FRCA TIN letter or card (PDF, JPG, or PNG, up to 10MB).')
     business_licence               = forms.FileField(label='Business Licence', required=False, help_text='Optional.')
     public_liability_insurance     = forms.FileField(label='Public Liability Insurance', required=False, help_text='Optional.')
@@ -1282,6 +1318,9 @@ class AddTradieRoleForm(forms.Form):
             self.fields['password'].required = False
             self.fields['password'].label = 'Password'
             self.fields['password'].help_text = "Not needed — you're signed in with Google."
+        self.reused_photo_id = bool(user and user.photo_id)
+        if self.reused_photo_id:
+            self.fields['photo_id'].help_text = PHOTO_ID_REUSE_HELP_TEXT
 
     def clean_email(self):
         email = self.cleaned_data['email'].lower()
@@ -1296,6 +1335,9 @@ class AddTradieRoleForm(forms.Form):
         if not self.user or not self.user.check_password(password):
             raise ValidationError('Incorrect password.')
         return password
+
+    def clean_photo_id(self):
+        return _clean_verification_document(self.cleaned_data.get('photo_id'))
 
     def clean_tin_letter(self):
         return _clean_verification_document(self.cleaned_data.get('tin_letter'))
@@ -1319,6 +1361,8 @@ class AddTradieRoleForm(forms.Form):
         cd = super().clean()
         if not cd.get('tin_letter') and not self.reused_tin_letter:
             self.add_error('tin_letter', 'Upload your TIN letter or card, or add a supplier account first so we can reuse it.')
+        if not cd.get('photo_id') and not self.reused_photo_id:
+            self.add_error('photo_id', 'Upload a photo ID.')
         return cd
 
     def save(self):
@@ -1350,6 +1394,9 @@ class AddTradieRoleForm(forms.Form):
             elif self.reused_tin_letter:
                 src = user.supplier_profile.tin_letter
                 profile.tin_letter.save(src.name, ContentFile(src.read()), save=False)
+            if cd.get('photo_id'):
+                user.photo_id = cd['photo_id']
+                user.save(update_fields=['photo_id'])
             profile.save()
             workspaces.ensure_user_capability(user, can_offer_services=True)
             workspaces.create_client_workspace(user)
@@ -1374,6 +1421,7 @@ class AddSupplierRoleForm(forms.Form):
     bio               = forms.CharField(required=False, widget=forms.Textarea(attrs={'class': 'form-input', 'rows': 4, 'placeholder': 'Describe your business, the products you supply, and your service area…'}))
     supply_categories = forms.MultipleChoiceField(choices=[], widget=forms.CheckboxSelectMultiple)
     service_towns     = forms.MultipleChoiceField(choices=TOWN_CHOICES, widget=forms.CheckboxSelectMultiple)
+    photo_id                  = _photo_id_field(required=False)
     tin_letter                = forms.FileField(label='TIN Letter or Card', required=False, help_text='Upload your FRCA TIN letter or card (PDF, JPG, or PNG, up to 10MB).')
     business_registration     = forms.FileField(label='Business Registration', required=False, help_text='Optional.')
     import_export_licence     = forms.FileField(label='Import/Export Licence', required=False, help_text='Optional.')
@@ -1398,6 +1446,9 @@ class AddSupplierRoleForm(forms.Form):
             self.fields['password'].required = False
             self.fields['password'].label = 'Password'
             self.fields['password'].help_text = "Not needed — you're signed in with Google."
+        self.reused_photo_id = bool(user and user.photo_id)
+        if self.reused_photo_id:
+            self.fields['photo_id'].help_text = PHOTO_ID_REUSE_HELP_TEXT
 
     def clean_email(self):
         email = self.cleaned_data['email'].lower()
@@ -1412,6 +1463,9 @@ class AddSupplierRoleForm(forms.Form):
         if not self.user or not self.user.check_password(password):
             raise ValidationError('Incorrect password.')
         return password
+
+    def clean_photo_id(self):
+        return _clean_verification_document(self.cleaned_data.get('photo_id'))
 
     def clean_tin_letter(self):
         return _clean_verification_document(self.cleaned_data.get('tin_letter'))
@@ -1430,6 +1484,8 @@ class AddSupplierRoleForm(forms.Form):
             raise ValidationError('Please select at least one service town.')
         if not cd.get('tin_letter') and not self.reused_tin_letter:
             self.add_error('tin_letter', 'Upload your TIN letter or card, or add a local pro account first so we can reuse it.')
+        if not cd.get('photo_id') and not self.reused_photo_id:
+            self.add_error('photo_id', 'Upload a photo ID.')
         return cd
 
     def save(self):
@@ -1452,6 +1508,9 @@ class AddSupplierRoleForm(forms.Form):
             elif self.reused_tin_letter:
                 src = user.tradie_profile.tin_letter
                 profile.tin_letter.save(src.name, ContentFile(src.read()), save=False)
+            if cd.get('photo_id'):
+                user.photo_id = cd['photo_id']
+                user.save(update_fields=['photo_id'])
             profile.save()
             workspaces.ensure_user_capability(user, can_offer_services=True)
             workspaces.create_client_workspace(user)

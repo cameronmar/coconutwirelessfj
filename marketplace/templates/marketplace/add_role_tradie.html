@@ -114,6 +114,8 @@
         <h2>Verification documents</h2>
         <p style="font-size:.85rem;color:var(--muted);margin:0 0 16px;">Documents are reviewed by our team before your profile is approved. PDF or image files accepted.</p>
 
+        {% include "marketplace/_photo_id_field.html" %}
+
         <div class="field">
           <label>TIN Letter or Card{% if not form.reused_tin_letter %} <span class="required-badge">Required</span>{% endif %}</label>
           <div class="upload-field">

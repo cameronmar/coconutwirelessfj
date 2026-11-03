@@ -1,0 +1,13 @@
+{% comment %}
+Photo ID upload shared by every signup and add-role page. Styles are inline
+because the client/Google signup pages don't carry the provider pages'
+.upload-field/.required-badge CSS. The form must use enctype="multipart/form-data".
+{% endcomment %}
+<div class="field">
+  <label for="{{ form.photo_id.id_for_label }}">Photo ID{% if not form.reused_photo_id %} <span style="font-size:.75rem;background:#e8f7ff;color:var(--blue);border-radius:6px;padding:2px 7px;margin-left:6px;font-weight:600;">Required</span>{% endif %}</label>
+  <div style="border:1.5px dashed #9cc7db;border-radius:10px;padding:12px 14px;background:#f7fcff;">
+    {{ form.photo_id }}
+    <div class="hint" style="margin-top:4px;font-size:.78rem;color:var(--muted);">{{ form.photo_id.help_text }}</div>
+  </div>
+  {% for e in form.photo_id.errors %}<div class="field-error">{{ e }}</div>{% endfor %}
+</div>

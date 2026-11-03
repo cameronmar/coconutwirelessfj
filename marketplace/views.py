@@ -575,7 +575,7 @@ def google_signup_complete(request):
             'form': GoogleSignupCompleteForm(**form_kwargs), 'email': email, 'town_choices': TOWN_CHOICES,
         })
 
-    form = GoogleSignupCompleteForm(request.POST or None, **form_kwargs)
+    form = GoogleSignupCompleteForm(request.POST or None, request.FILES or None, **form_kwargs)
     if request.method == 'POST' and form.is_valid():
         cd = form.cleaned_data
         with transaction.atomic():
@@ -588,6 +588,7 @@ def google_signup_complete(request):
                 town=cd['town'],
                 role=User.ROLE_CLIENT,
                 date_of_birth=cd['date_of_birth'],
+                photo_id=cd['photo_id'],
             )
             if user.is_minor:
                 user.guardian_name = cd.get('guardian_name', '').strip()
@@ -642,7 +643,7 @@ def register_client(request):
             'beta_gate_clients': settings.BETA_GATE_CLIENT_SIGNUPS,
             'google_nonce': _google_nonce(request),
         })
-    form = ClientRegistrationForm(request.POST or None)
+    form = ClientRegistrationForm(request.POST or None, request.FILES or None)
     if request.method == 'POST' and form.is_valid():
         user = form.save(request=request)
         settings_obj = PlatformSettings.get_active()
@@ -2004,6 +2005,8 @@ def delete_account(request):
                         file_field.delete(save=False)
                 profile.save()
 
+            if user.photo_id:
+                user.photo_id.delete(save=False)
             user.email      = f'deleted-user-{user.pk}@deleted.coconutwireless.fj'
             user.first_name = ''
             user.last_name  = ''

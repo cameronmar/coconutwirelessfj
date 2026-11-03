@@ -127,18 +127,28 @@ def _start_migrate_to_local_pro(modeladmin, request, users):
     return redirect(reverse('admin:marketplace_user_migrate_to_tradie', args=[users[0].pk]))
 
 
+def _photo_id_link(user):
+    """Admin view link for User.photo_id — shared by the User, TradieProfile
+    and SupplierProfile admins so reviewers see it wherever they verify."""
+    from django.utils.html import format_html
+    if user and user.photo_id:
+        return format_html('<a href="{}" target="_blank">View Photo ID</a>', user.photo_id.url)
+    return '—'
+
+
 @admin.register(User)
 class UserAdmin(BaseUserAdmin):
     ordering = ['email']
-    list_display = ['email', 'first_name', 'last_name', 'role', 'town', 'is_tester', 'is_market_founding_member', 'is_active', 'date_joined', 'accepted_terms_display']
+    list_display = ['email', 'first_name', 'last_name', 'role', 'town', 'has_photo_id', 'is_tester', 'is_market_founding_member', 'is_active', 'date_joined', 'accepted_terms_display']
     list_filter  = ['role', 'town', 'is_tester', 'is_market_founding_member', 'is_active', HasAcceptedTermsFilter]
     search_fields = ['email', 'first_name', 'last_name']
     actions = ['grant_tester_access', 'revoke_tester_access', 'migrate_to_local_pro']
-    readonly_fields = ['account_deleted_at']
+    readonly_fields = ['account_deleted_at', 'photo_id_link']
     inlines = [SocialAccountInline]
     fieldsets = (
         (None,           {'fields': ('email', 'password')}),
         ('Personal',     {'fields': ('first_name', 'last_name', 'mobile', 'town', 'role')}),
+        ('Identity',     {'fields': ('photo_id', 'photo_id_link'), 'description': 'Required at signup for every account type. Accounts created before photo ID was required may have none.'}),
         ('Beta Access',  {'fields': ('is_tester',), 'description': 'Testers can preview features gated behind an unlaunched-feature flag (e.g. supplier accounts) before general availability.'}),
         ('Market Founding Seller', {'fields': ('is_market_founding_member', 'market_founding_credit_balance')}),
         ('Permissions',  {'fields': ('is_active', 'is_staff', 'is_superuser', 'groups', 'user_permissions')}),
@@ -151,6 +161,14 @@ class UserAdmin(BaseUserAdmin):
             'fields': ('email', 'first_name', 'last_name', 'role', 'town', 'mobile', 'password1', 'password2'),
         }),
     )
+
+    @admin.display(boolean=True, description='Photo ID')
+    def has_photo_id(self, obj):
+        return bool(obj.photo_id)
+
+    @admin.display(description='Photo ID (view)')
+    def photo_id_link(self, obj):
+        return _photo_id_link(obj)
 
     @admin.action(description='Grant tester access (can preview unlaunched features)')
     def grant_tester_access(self, request, queryset):
@@ -381,12 +399,13 @@ class TradieProfileAdmin(CategoryBulkActionsMixin, admin.ModelAdmin):
     action_form = _category_action_form(TradeCategory)
     category_field = 'trades'
     category_model = TradeCategory
-    list_display  = ['user', 'business_name', 'years_experience', 'service_towns_display', 'verification_status', 'has_tin_letter', 'documents_verified', 'needs_safety_review_display', 'is_founding_member', 'founding_member_credit_balance']
+    list_display  = ['user', 'business_name', 'years_experience', 'service_towns_display', 'verification_status', 'has_photo_id', 'has_tin_letter', 'documents_verified', 'needs_safety_review_display', 'is_founding_member', 'founding_member_credit_balance']
     list_filter   = ['verification_status', 'documents_verified', 'safety_documents_reviewed', 'is_founding_member']
     search_fields = ['user__email', 'user__first_name', 'business_name', 'tin']
     raw_id_fields = ['user']
     readonly_fields = [
         'documents_verified',
+        'photo_id_link',
         'tin_letter_link',
         'business_licence_link',
         'public_liability_insurance_link',
@@ -398,6 +417,7 @@ class TradieProfileAdmin(CategoryBulkActionsMixin, admin.ModelAdmin):
         ('Business Details',  {'fields': ('user', 'business_name', 'tin', 'years_experience')}),
         ('Trade Categories',  {'fields': ('trades', 'service_towns', 'bio')}),
         ('Verification Documents', {'fields': (
+            'photo_id_link',
             'tin_letter', 'tin_letter_link',
             'business_licence', 'business_licence_link',
             'public_liability_insurance', 'public_liability_insurance_link',
@@ -419,6 +439,14 @@ class TradieProfileAdmin(CategoryBulkActionsMixin, admin.ModelAdmin):
     def service_towns_display(self, obj):
         return obj.service_towns_display()
     service_towns_display.short_description = 'Service towns'
+
+    @admin.display(boolean=True, description='Photo ID')
+    def has_photo_id(self, obj):
+        return bool(obj.user.photo_id)
+
+    @admin.display(description='Photo ID (view — replace it on the User record)')
+    def photo_id_link(self, obj):
+        return _photo_id_link(obj.user)
 
     def has_tin_letter(self, obj):
         return bool(obj.tin_letter)
@@ -1584,12 +1612,20 @@ class SupplierProfileAdmin(CategoryBulkActionsMixin, admin.ModelAdmin):
     action_form = _category_action_form(SupplyCategory)
     category_field = 'supply_categories'
     category_model = SupplyCategory
-    list_display = ('user', 'business_name', 'categories_display', 'verification_status', 'documents_verified')
+    list_display = ('user', 'business_name', 'categories_display', 'verification_status', 'has_photo_id', 'documents_verified')
     list_filter = ('verification_status',)
     search_fields = ('user__email', 'user__first_name', 'business_name')
     raw_id_fields = ('user',)
     actions = ['add_category', 'remove_category', 'approve_suppliers', 'reject_suppliers', 'suspend_suppliers', 'migrate_to_local_pro']
-    readonly_fields = ('documents_verified',)
+    readonly_fields = ('documents_verified', 'photo_id_link')
+
+    @admin.display(boolean=True, description='Photo ID')
+    def has_photo_id(self, obj):
+        return bool(obj.user.photo_id)
+
+    @admin.display(description='Photo ID (view — replace it on the User record)')
+    def photo_id_link(self, obj):
+        return _photo_id_link(obj.user)
 
     @admin.display(description='Supply categories')
     def categories_display(self, obj):

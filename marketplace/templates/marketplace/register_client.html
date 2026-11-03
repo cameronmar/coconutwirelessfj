@@ -65,7 +65,7 @@ main{display:flex;align-items:center;justify-content:center;padding:36px 20px;mi
     {% if suppliers_visible %}{% include "marketplace/_account_type_help.html" %}{% endif %}
 
     <div class="card">
-      <form method="post">
+      <form method="post" enctype="multipart/form-data">
         {% csrf_token %}
         <div class="row2">
           <div class="field">
@@ -121,6 +121,7 @@ main{display:flex;align-items:center;justify-content:center;padding:36px 20px;mi
           </div>
           {% for e in form.guardian_consent.errors %}<div class="field-error">{{ e }}</div>{% endfor %}
         </div>
+        {% include "marketplace/_photo_id_field.html" %}
         <div class="field">
           <label>Password</label>
           <div class="pw-wrap">

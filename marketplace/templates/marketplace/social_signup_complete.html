@@ -25,7 +25,7 @@ main{display:flex;align-items:center;justify-content:center;padding:36px 20px;mi
     <div class="email-band">Signing up as <strong>{{ email }}</strong> via Google</div>
 
     <div class="card">
-      <form method="post">
+      <form method="post" enctype="multipart/form-data">
         {% csrf_token %}
         <div class="field">
           <label>What brings you here?</label>
@@ -71,6 +71,7 @@ main{display:flex;align-items:center;justify-content:center;padding:36px 20px;mi
           </div>
           {% for e in form.guardian_consent.errors %}<div class="field-error">{{ e }}</div>{% endfor %}
         </div>
+        {% include "marketplace/_photo_id_field.html" %}
         {% if form.non_field_errors %}
           <div class="field-error" style="margin-bottom:12px;">{{ form.non_field_errors }}</div>
         {% endif %}

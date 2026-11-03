@@ -54,9 +54,10 @@ Recommended verification cadence:
 
 Minimum review checklist for each provider:
 
-1. TIN letter or card uploaded and legible
-2. If Electrical selected, electrical licence uploaded
-3. If Plumbing selected, plumber licence uploaded
-4. If Air Conditioning selected, air conditioning / refrigeration licence uploaded
-5. Business details and service towns look valid
-6. Verification notes updated in admin when rejecting/suspending
+1. Photo ID uploaded, legible, and the name matches the account (shown on the profile under Verification Documents)
+2. TIN letter or card uploaded and legible
+3. If Electrical selected, electrical licence uploaded
+4. If Plumbing selected, plumber licence uploaded
+5. If Air Conditioning selected, air conditioning / refrigeration licence uploaded
+6. Business details and service towns look valid
+7. Verification notes updated in admin when rejecting/suspending
