@@ -62,13 +62,6 @@ from .utils import (
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
-@override_settings(
-    STORAGES={
-        'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
-        'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
-    }
-)
-
 def _photo_id_upload():
     """A valid photo ID upload — required by every signup/add-role form."""
     return SimpleUploadedFile('photo-id.jpg', b'fake-jpeg-bytes', content_type='image/jpeg')
@@ -4642,6 +4635,12 @@ class DeleteTaskTests(TestCase):
         self.assertIsNone(self.task.removed_at)
 
 
+@override_settings(
+    STORAGES={
+        'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
+        'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
+    }
+)
 class PhotoIdRequirementTests(TestCase):
     """Every signup path (client, local pro, supplier, Google) requires a
     photo ID, stored once on User; add-role forms only ask when the account
