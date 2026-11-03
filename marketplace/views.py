@@ -65,6 +65,9 @@ from .forms import (
     TradieRegistrationForm,
 )
 from .models import (
+    TESTER_PROGRAM_DAYS,
+    TesterEnrolment,
+    TesterTask,
     ContentReport,
     ContractorReferral,
     Invoice,
@@ -94,7 +97,7 @@ from .models import (
     TradieProfile,
     User,
 )
-from . import workspaces
+from . import testers, workspaces
 from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token as google_id_token
 from .utils import (
@@ -612,6 +615,7 @@ def google_signup_complete(request):
         login(request, user)
         request.session.set_expiry(None)
         send_welcome_notice(user)
+        testers.queue_welcome_prompt(request)
         del request.session['pending_social_signup']
 
         role = cd['role']
@@ -655,6 +659,7 @@ def register_client(request):
         )
         login(request, user)
         send_welcome_notice(user)
+        testers.queue_welcome_prompt(request)
         flash.success(request, f'Bula, {user.first_name}! Your client account is ready.')
         if request.GET.get('next'):
             return redirect(_safe_google_redirect(request, request.GET['next']))
@@ -711,6 +716,7 @@ def register_tradie(request):
         )
         login(request, user)
         send_welcome_notice(user)
+        testers.queue_welcome_prompt(request)
         try:
             approve_url = request.build_absolute_uri(
                 reverse('admin:marketplace_tradieprofile_change', args=[user.tradie_profile.pk])
@@ -1927,6 +1933,79 @@ def notices(request):
 
 
 @login_required
+def tester_tutorial(request):
+    """The app tester's 14-day tutorial: today's task, every unlocked task,
+    and their progress/streak. Testers who requested but aren't confirmed
+    yet see a "waiting for confirmation" state."""
+    enrolment = TesterEnrolment.objects.filter(user=request.user).first()
+    if not enrolment:
+        raise Http404
+    today_day = enrolment.current_day()
+    completions = {c.task.day: c for c in enrolment.completions.select_related('task')}
+    on_time = enrolment.on_time_days()
+    days = []
+    for task in TesterTask.objects.all():
+        days.append({
+            'task': task,
+            'unlocked': task.day <= today_day,
+            'is_today': task.day == today_day,
+            'date': enrolment.date_for_day(task.day),
+            'completion': completions.get(task.day),
+            'on_time': task.day in on_time,
+        })
+    return render(request, 'marketplace/tester_tutorial.html', {
+        'enrolment': enrolment,
+        'days': days,
+        'today_day': today_day,
+        'total_days': TESTER_PROGRAM_DAYS,
+        'completed_count': len(completions),
+        'streak': enrolment.streak(),
+    })
+
+
+@login_required
+@require_POST
+def tester_welcome(request):
+    """Answers from the post-signup welcome bubble:
+      yes       — "Are you an app tester?" Yes
+      join      — "Do you want to be one?" Yes, with both requirements ticked
+      no_thanks — not a tester and doesn't want to be (or closed the bubble)
+    Every answer except an incomplete "join" dismisses the bubble."""
+    choice = request.POST.get('choice', '')
+    back = _safe_google_redirect(request, request.POST.get('next', ''))
+    if choice == 'join':
+        play_email = request.POST.get('confirmed_play_email') == 'on'
+        android = request.POST.get('confirmed_android_device') == 'on'
+        if not (play_email and android):
+            flash.error(request, 'To become an app tester, please tick both requirements.')
+            return redirect(back)
+        testers.request_enrolment(
+            request.user, request, source=TesterEnrolment.SOURCE_VOLUNTEER,
+            confirmed_play_email=True, confirmed_android_device=True,
+        )
+    elif choice == 'yes':
+        testers.request_enrolment(request.user, request, source=TesterEnrolment.SOURCE_INVITED)
+    elif choice != 'no_thanks':
+        return redirect(back)
+    request.session.pop(testers.WELCOME_PROMPT_SESSION_KEY, None)
+    if choice in ('yes', 'join'):
+        flash.success(request, "Vinaka! We'll confirm your app tester status and let you know when your 14 days start.")
+    return redirect(back)
+
+
+@login_required
+@require_POST
+def tester_complete_task(request, day):
+    enrolment = get_object_or_404(TesterEnrolment, user=request.user)
+    task = get_object_or_404(TesterTask, day=day)
+    if testers.complete_task(enrolment, task, request.POST.get('feedback', '')[:2000]):
+        flash.success(request, f'Day {day} marked as done — vinaka!')
+    else:
+        flash.error(request, "That task isn't available yet.")
+    return redirect('tester_tutorial')
+
+
+@login_required
 def notification_settings(request):
     form = NotificationPreferencesForm(request.POST or None, instance=request.user)
     if request.method == 'POST' and form.is_valid():
@@ -2007,6 +2086,9 @@ def delete_account(request):
 
             if user.photo_id:
                 user.photo_id.delete(save=False)
+            TesterEnrolment.objects.filter(user=user).exclude(
+                status=TesterEnrolment.STATUS_COMPLETED,
+            ).update(status=TesterEnrolment.STATUS_WITHDRAWN)
             user.email      = f'deleted-user-{user.pk}@deleted.coconutwireless.fj'
             user.first_name = ''
             user.last_name  = ''
@@ -2567,6 +2649,7 @@ def market_listing_detail(request, pk):
                                 fee_amount -= discount
                                 seller_locked.market_founding_credit_balance -= discount
                                 seller_locked.save(update_fields=['market_founding_credit_balance'])
+                        fee_amount -= testers.apply_fee_credit(locked.seller_id, fee_amount)
                         order = MarketOrder.objects.create(
                             listing=locked,
                             buyer=request.user,
@@ -2790,6 +2873,7 @@ def register_supplier(request):
         )
         login(request, user)
         send_welcome_notice(user)
+        testers.queue_welcome_prompt(request)
         notify_admin(
             f'New supplier pending approval: {user.full_name}',
             f'Supplier {user.full_name} ({user.email}) registered and is pending document verification.',

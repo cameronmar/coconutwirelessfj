@@ -65,3 +65,19 @@ def header_counts(request):
     return {
         'unread_messages_count': Message.objects.filter(recipient=user, read_at__isnull=True).count(),
     }
+
+
+def tester_welcome(request):
+    """Whether to show the post-signup "Are you an app tester?" welcome
+    bubble (queued by testers.queue_welcome_prompt at signup)."""
+    from . import testers
+    from .models import TESTER_REWARD_CREDIT, TESTER_REWARD_SLOTS
+    user = getattr(request, 'user', None)
+    session = getattr(request, 'session', None)
+    if not (user and user.is_authenticated and session and session.get(testers.WELCOME_PROMPT_SESSION_KEY)):
+        return {}
+    return {
+        'show_tester_welcome': True,
+        'tester_reward_slots': TESTER_REWARD_SLOTS,
+        'tester_reward_credit': f'{TESTER_REWARD_CREDIT:,.0f}',
+    }

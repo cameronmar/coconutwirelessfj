@@ -92,6 +92,15 @@ class User(AbstractUser):
     # account type.
     is_tester = models.BooleanField(default=False, verbose_name='Beta tester (can preview unlaunched features)')
 
+    # App tester reward (see TesterEnrolment / testers.py): the first
+    # TESTER_REWARD_SLOTS testers to finish the 14-day tutorial get this
+    # credit, spent down automatically against any platform fee they're
+    # charged (job success fees and Market fees) after any other discount.
+    tester_fee_credit_balance = models.DecimalField(
+        max_digits=10, decimal_places=2, default=Decimal('0.00'),
+        verbose_name='App tester platform fee credit balance (FJD)',
+    )
+
     # Self-service account deletion (views.delete_account). The row itself
     # is never hard-deleted — Task/Quote/Invoice/PlatformFee/etc. all
     # reference User and must survive for financial/dispute record-keeping
@@ -1583,6 +1592,8 @@ class PlatformNotice(models.Model):
     TYPE_NEW_MARKET_ORDER  = 'new_market_order'
     TYPE_MARKET_ORDER_UPDATE = 'market_order_update'
     TYPE_ACCOUNT_MIGRATED  = 'account_migrated'
+    TYPE_TESTER_ENROLLED   = 'tester_enrolled'
+    TYPE_TESTER_DAILY_TASK = 'tester_daily_task'
     TYPE_CHOICES = [
         (TYPE_WELCOME,          'Welcome Message'),
         (TYPE_INVOICE,          'Invoice Notice'),
@@ -1596,6 +1607,8 @@ class PlatformNotice(models.Model):
         (TYPE_NEW_MARKET_ORDER, 'New Market Order'),
         (TYPE_MARKET_ORDER_UPDATE, 'Market Order Update'),
         (TYPE_ACCOUNT_MIGRATED, 'Account Migrated to Local Professional'),
+        (TYPE_TESTER_ENROLLED,  'App Tester Enrolment Confirmed'),
+        (TYPE_TESTER_DAILY_TASK, 'App Tester Daily Task'),
     ]
 
     CHANNEL_EMAIL       = 'email'
@@ -2125,3 +2138,144 @@ def _release_platform_fees_on_invoice_delete(sender, instance, **kwargs):
     PlatformFee.objects.filter(
         invoice_lines__invoice=instance, status=PlatformFee.STATUS_INVOICED
     ).update(status=PlatformFee.STATUS_PENDING)
+
+
+# ── App tester program (14-day engagement tutorial) ─────────────────────────
+# Google Play requires a closed test to keep testers engaged for 14
+# consecutive days before an app can go to production. Right after signup a
+# welcome bubble asks "Are you an app tester?" (or, if not, whether they'd
+# like to be one) — answering yes creates a TesterEnrolment
+# (status=requested), an admin
+# confirms them from the Tester Enrolments admin, and from then on they get
+# one TesterTask per day for 14 days (management command
+# send_tester_daily_tasks), marking each one done from /testers/.
+
+TESTER_PROGRAM_DAYS = 14
+TESTER_REWARD_SLOTS = 15
+TESTER_REWARD_CREDIT = Decimal('1000.00')  # FJD, on all platform fees
+
+
+class TesterTask(models.Model):
+    """One day of the tutorial. Admin-editable; seeded with 14 defaults."""
+    day          = models.PositiveSmallIntegerField(unique=True, help_text=f'1–{TESTER_PROGRAM_DAYS}')
+    title        = models.CharField(max_length=120)
+    instructions = models.TextField(help_text='What the tester should do in the app today.')
+    link_path    = models.CharField(
+        max_length=200, blank=True,
+        help_text='Optional in-app path to send them to, e.g. /tasks/ or /market/.',
+    )
+
+    class Meta:
+        ordering = ['day']
+        verbose_name = 'Tester Tutorial Task'
+        verbose_name_plural = 'Tester Tutorial Tasks'
+
+    def __str__(self):
+        return f'Day {self.day}: {self.title}'
+
+
+class TesterEnrolment(models.Model):
+    STATUS_REQUESTED = 'requested'
+    STATUS_ENROLLED  = 'enrolled'
+    STATUS_COMPLETED = 'completed'
+    STATUS_DECLINED  = 'declined'
+    STATUS_WITHDRAWN = 'withdrawn'
+    SOURCE_INVITED   = 'invited'
+    SOURCE_VOLUNTEER = 'volunteer'
+    SOURCE_ADMIN     = 'admin'
+    SOURCE_CHOICES = [
+        (SOURCE_INVITED,   'Said they are an app tester'),
+        (SOURCE_VOLUNTEER, 'Volunteered to become a tester'),
+        (SOURCE_ADMIN,     'Added by admin'),
+    ]
+
+    STATUS_CHOICES = [
+        (STATUS_REQUESTED, 'Requested — awaiting admin confirmation'),
+        (STATUS_ENROLLED,  'Enrolled — tutorial in progress'),
+        (STATUS_COMPLETED, 'Completed all 14 days'),
+        (STATUS_DECLINED,  'Declined by admin'),
+        (STATUS_WITHDRAWN, 'Withdrawn'),
+    ]
+
+    user         = models.OneToOneField(User, on_delete=models.CASCADE, related_name='tester_enrolment')
+    status       = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_REQUESTED)
+    source       = models.CharField(max_length=20, choices=SOURCE_CHOICES, default=SOURCE_ADMIN)
+    confirmed_play_email     = models.BooleanField(default=False, verbose_name='Confirmed their email is linked to their Google Play account')
+    confirmed_android_device = models.BooleanField(default=False, verbose_name='Confirmed they have an Android device')
+    requested_at = models.DateTimeField(auto_now_add=True)
+    enrolled_at  = models.DateTimeField(null=True, blank=True)
+    enrolled_by  = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
+    start_date   = models.DateField(null=True, blank=True, help_text='Day 1 of the tutorial (Fiji date).')
+    last_task_notified_day = models.PositiveSmallIntegerField(
+        default=0, help_text='Highest tutorial day a task notification has been sent for.',
+    )
+    reward_credit_awarded_at = models.DateTimeField(
+        null=True, blank=True,
+        help_text=f'Set when this tester was one of the first {TESTER_REWARD_SLOTS} to finish and got the fee credit.',
+    )
+    admin_notes  = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ['-requested_at']
+        verbose_name = 'Tester Enrolment'
+        verbose_name_plural = 'Tester Enrolments'
+
+    def __str__(self):
+        return f'{self.user} – {self.get_status_display()}'
+
+    def current_day(self, today=None):
+        """Tutorial day number for `today` (1-based), capped at
+        TESTER_PROGRAM_DAYS; 0 before enrolment or before start_date."""
+        if not self.start_date:
+            return 0
+        from django.utils import timezone as dj_tz
+        today = today or dj_tz.localdate()
+        day = (today - self.start_date).days + 1
+        if day < 1:
+            return 0
+        return min(day, TESTER_PROGRAM_DAYS)
+
+    def date_for_day(self, day):
+        from datetime import timedelta
+        return self.start_date + timedelta(days=day - 1) if self.start_date else None
+
+    def completed_days(self):
+        return set(self.completions.values_list('task__day', flat=True))
+
+    def on_time_days(self):
+        """Days whose task was completed on that day itself (Fiji time) —
+        the measure of genuinely consecutive daily engagement."""
+        from django.utils import timezone as dj_tz
+        days = set()
+        for c in self.completions.select_related('task'):
+            if dj_tz.localdate(c.completed_at) == self.date_for_day(c.task.day):
+                days.add(c.task.day)
+        return days
+
+    def streak(self, today=None):
+        """Consecutive on-time days ending at today (or yesterday, if today's
+        task isn't done yet — the streak isn't broken until the day is over)."""
+        on_time = self.on_time_days()
+        day = self.current_day(today)
+        if day and day not in on_time:
+            day -= 1
+        count = 0
+        while day >= 1 and day in on_time:
+            count += 1
+            day -= 1
+        return count
+
+
+class TesterTaskCompletion(models.Model):
+    enrolment    = models.ForeignKey(TesterEnrolment, on_delete=models.CASCADE, related_name='completions')
+    task         = models.ForeignKey(TesterTask, on_delete=models.CASCADE, related_name='completions')
+    completed_at = models.DateTimeField(auto_now_add=True)
+    feedback     = models.TextField(blank=True, help_text="Tester's optional note on what they noticed.")
+
+    class Meta:
+        ordering = ['task__day']
+        unique_together = [('enrolment', 'task')]
+        verbose_name = 'Tester Task Completion'
+
+    def __str__(self):
+        return f'{self.enrolment.user} – day {self.task.day}'

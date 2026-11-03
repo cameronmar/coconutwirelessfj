@@ -51,6 +51,7 @@
       <div class="account-menu">
         <button type="button" class="account-toggle" id="accountToggle" aria-haspopup="true" aria-expanded="false" aria-controls="accountMenu">Account ▾</button>
         <div class="account-dropdown" id="accountMenu">
+          {% if user.tester_enrolment %}<a href="{% url 'tester_tutorial' %}">App tester tasks</a>{% endif %}
           <a href="{% url 'how_it_works' %}">How It Works</a>
           <a href="{% url 'contact_support' %}">Contact Us</a>
           <a href="{% url 'change_password' %}">Change password</a>
@@ -114,6 +115,8 @@
 </footer>
 
 {% block scripts %}{% endblock %}
+
+{% if show_tester_welcome %}{% include "marketplace/_tester_welcome.html" %}{% endif %}
 
 {% if user.is_authenticated %}
 <script>

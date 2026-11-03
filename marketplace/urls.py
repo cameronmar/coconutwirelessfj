@@ -69,6 +69,9 @@ urlpatterns = [
     # Notices
     path('notices/',                         views.notices,      name='notices'),
     path('notices/settings/',                views.notification_settings, name='notification_settings'),
+    path('testers/',                         views.tester_tutorial, name='tester_tutorial'),
+    path('testers/welcome/',                 views.tester_welcome, name='tester_welcome'),
+    path('testers/<int:day>/complete/',      views.tester_complete_task, name='tester_complete_task'),
     # Android app bridge
     path('api/register-device/',             views.register_fcm_token, name='register_fcm_token'),
     # Suppliers
