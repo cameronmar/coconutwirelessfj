@@ -57,6 +57,12 @@ class User(AbstractUser):
     mobile = models.CharField(max_length=20, blank=True)
     town   = models.CharField(max_length=50, blank=True)
 
+    # Required at every signup (client, local pro, supplier, Google). Lives on
+    # User rather than on TradieProfile/SupplierProfile because it identifies
+    # the person, not the business — one upload covers every role they add
+    # later. Blank for accounts created before this was required.
+    photo_id = models.FileField(upload_to='identity_documents/', blank=True, verbose_name='Photo ID')
+
     # Email notification preferences — always logged in-app regardless (see
     # Notices), these only control the optional extra email channel.
     notify_email_new_quote     = models.BooleanField(default=True, verbose_name='Email me when a local professional quotes on my job')

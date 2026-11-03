@@ -62,12 +62,10 @@ from .utils import (
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
-@override_settings(
-    STORAGES={
-        'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
-        'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
-    }
-)
+def _photo_id_upload():
+    """A valid photo ID upload — required by every signup/add-role form."""
+    return SimpleUploadedFile('photo-id.jpg', b'fake-jpeg-bytes', content_type='image/jpeg')
+
 class CriticalPathViewsTests(TestCase):
     def test_home_page_returns_200(self):
         response = self.client.get('/', secure=True)
@@ -340,6 +338,7 @@ class ClosedBetaAndApprovalFlowTests(TestCase):
                 'accepted_terms': 'on',
                 'accepted_platform_circumvention': 'on',
                 'accepted_invoicing_terms': 'on',
+                'photo_id': _photo_id_upload(),
                 'tin_letter': SimpleUploadedFile('tin.pdf', b'pdf-content', content_type='application/pdf'),
             },
             secure=True,
@@ -371,6 +370,7 @@ class ClosedBetaAndApprovalFlowTests(TestCase):
                 'accepted_terms': 'on',
                 'accepted_platform_circumvention': 'on',
                 'accepted_invoicing_terms': 'on',
+                'photo_id': _photo_id_upload(),
                 'tin_letter': SimpleUploadedFile('tin.pdf', b'pdf-content', content_type='application/pdf'),
             },
             secure=True,
@@ -3407,11 +3407,13 @@ class WorkspaceWiringIntegrationTests(TestCase):
                 'first_name': 'New', 'last_name': 'Reg', 'email': 'new-reg-client@example.com',
                 'mobile': '+679 123 4567', 'town': 'Suva', 'date_of_birth': '2000-01-01',
                 'password': 'pass12345', 'password_confirm': 'pass12345', 'accepted_terms': 'on',
+                'photo_id': _photo_id_upload(),
             },
             secure=True,
         )
         self.assertEqual(response.status_code, 302)
         user = User.objects.get(email='new-reg-client@example.com')
+        self.assertTrue(user.photo_id)
         self.assertTrue(UserCapability.objects.filter(user=user, can_hire=True).exists())
         self.assertTrue(Workspace.objects.filter(owner=user, workspace_type=Workspace.TYPE_CLIENT).exists())
 
@@ -3425,6 +3427,7 @@ class WorkspaceWiringIntegrationTests(TestCase):
                 'business_name': '', 'tin': '', 'years_experience': '1-3 years',
                 'bio': 'Bio', 'trades': ['cleaning'], 'service_towns': ['Suva'],
                 'accepted_terms': 'on', 'accepted_platform_circumvention': 'on', 'accepted_invoicing_terms': 'on',
+                'photo_id': _photo_id_upload(),
                 'tin_letter': SimpleUploadedFile('tin.pdf', b'pdf-content', content_type='application/pdf'),
             },
             secure=True,
@@ -3648,7 +3651,7 @@ class AddRoleFormTests(TestCase):
         from .forms import AddTradieRoleForm
         form = AddTradieRoleForm(
             data=self._base_tradie_data(password='wrong'),
-            files={'tin_letter': SimpleUploadedFile('tin.pdf', b'%PDF-1.4', content_type='application/pdf')},
+            files={'tin_letter': SimpleUploadedFile('tin.pdf', b'%PDF-1.4', content_type='application/pdf'), 'photo_id': _photo_id_upload()},
             user=self.user,
         )
         self.assertFalse(form.is_valid())
@@ -3658,7 +3661,7 @@ class AddRoleFormTests(TestCase):
         from .forms import AddTradieRoleForm
         form = AddTradieRoleForm(
             data=self._base_tradie_data(email='someone-else@example.com', use_same_credentials=''),
-            files={'tin_letter': SimpleUploadedFile('tin.pdf', b'%PDF-1.4', content_type='application/pdf')},
+            files={'tin_letter': SimpleUploadedFile('tin.pdf', b'%PDF-1.4', content_type='application/pdf'), 'photo_id': _photo_id_upload()},
             user=self.user,
         )
         self.assertFalse(form.is_valid())
@@ -3675,6 +3678,7 @@ class AddRoleFormTests(TestCase):
         form = AddTradieRoleForm(
             data=self._base_tradie_data(trades=['aircon']),
             files={
+                'photo_id': _photo_id_upload(),
                 'tin_letter': SimpleUploadedFile('tin.pdf', b'%PDF-1.4', content_type='application/pdf'),
                 'aircon_licence': SimpleUploadedFile('licence.pdf', b'%PDF-1.4', content_type='application/pdf'),
             },
@@ -3696,7 +3700,7 @@ class AddRoleFormTests(TestCase):
         from .forms import AddTradieRoleForm
         form = AddTradieRoleForm(
             data=self._base_tradie_data(),
-            files={'tin_letter': SimpleUploadedFile('tin.pdf', b'%PDF-1.4', content_type='application/pdf')},
+            files={'tin_letter': SimpleUploadedFile('tin.pdf', b'%PDF-1.4', content_type='application/pdf'), 'photo_id': _photo_id_upload()},
             user=self.user,
         )
         self.assertTrue(form.is_valid(), form.errors)
@@ -3711,9 +3715,12 @@ class AddRoleFormTests(TestCase):
             user=self.user, supply_categories=['building-materials'], service_towns=['Suva'],
             tin_letter=SimpleUploadedFile('supplier-tin.pdf', b'%PDF-1.4 supplier', content_type='application/pdf'),
         )
+        self.user.photo_id = _photo_id_upload()
+        self.user.save()
         form = AddTradieRoleForm(data=self._base_tradie_data(), files={}, user=self.user)
         self.assertTrue(form.is_valid(), form.errors)
         self.assertTrue(form.reused_tin_letter)
+        self.assertTrue(form.reused_photo_id)
         form.save()
         self.assertTrue(self.user.tradie_profile.tin_letter)
         self.user.supplier_profile.refresh_from_db()
@@ -3733,7 +3740,7 @@ class AddRoleFormTests(TestCase):
         from .forms import AddSupplierRoleForm
         form = AddSupplierRoleForm(
             data=self._base_supplier_data(),
-            files={'tin_letter': SimpleUploadedFile('tin.pdf', b'%PDF-1.4', content_type='application/pdf')},
+            files={'tin_letter': SimpleUploadedFile('tin.pdf', b'%PDF-1.4', content_type='application/pdf'), 'photo_id': _photo_id_upload()},
             user=self.user,
         )
         self.assertTrue(form.is_valid(), form.errors)
@@ -3776,6 +3783,7 @@ class AddRoleViewTests(TestCase):
                 'business_name': '', 'tin': '', 'years_experience': '1-3 years', 'bio': 'Bio',
                 'trades': ['cleaning'], 'service_towns': ['Suva'],
                 'accepted_platform_circumvention': 'on', 'accepted_invoicing_terms': 'on',
+                'photo_id': _photo_id_upload(),
                 'tin_letter': SimpleUploadedFile('tin.pdf', b'%PDF-1.4', content_type='application/pdf'),
             },
             secure=True,
@@ -3857,7 +3865,7 @@ class SupplierRegistrationWorkspaceGapFixTests(TestCase):
                 'supply_categories': ['building-materials'], 'service_towns': ['Suva'],
                 'accepted_terms': 'on',
             },
-            files={'tin_letter': SimpleUploadedFile('tin.pdf', b'%PDF-1.4', content_type='application/pdf')},
+            files={'tin_letter': SimpleUploadedFile('tin.pdf', b'%PDF-1.4', content_type='application/pdf'), 'photo_id': _photo_id_upload()},
         )
         self.assertTrue(form.is_valid(), form.errors)
         user = form.save()
@@ -4250,7 +4258,7 @@ class GoogleLoginTests(TestCase):
             reverse('google_signup_complete'),
             {
                 'role': 'client', 'mobile': '+679 123 4567', 'town': 'Suva',
-                'date_of_birth': '1995-01-01', 'accepted_terms': 'on',
+                'date_of_birth': '1995-01-01', 'accepted_terms': 'on', 'photo_id': _photo_id_upload(),
             },
             secure=True,
         )
@@ -4258,6 +4266,7 @@ class GoogleLoginTests(TestCase):
         self.assertRedirects(response, reverse('client_dashboard'), fetch_redirect_response=False)
         user = User.objects.get(email=pending['email'])
         self.assertFalse(user.has_usable_password())
+        self.assertTrue(user.photo_id)
         self.assertEqual(user.role, User.ROLE_CLIENT)
         social = SocialAccount.objects.get(user=user)
         self.assertEqual(social.provider, SocialAccount.PROVIDER_GOOGLE)
@@ -4373,7 +4382,7 @@ class GoogleLoginTests(TestCase):
             {
                 'role': 'client', 'mobile': '+679 123 4567', 'town': 'Suva', 'date_of_birth': minor_dob,
                 'guardian_name': 'Parent Person', 'guardian_contact': 'parent@example.com', 'guardian_consent': 'on',
-                'accepted_terms': 'on',
+                'accepted_terms': 'on', 'photo_id': _photo_id_upload(),
             },
             secure=True,
         )
@@ -4624,3 +4633,113 @@ class DeleteTaskTests(TestCase):
         self.assertEqual(response.status_code, 404)
         self.task.refresh_from_db()
         self.assertIsNone(self.task.removed_at)
+
+
+@override_settings(
+    STORAGES={
+        'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
+        'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
+    }
+)
+class PhotoIdRequirementTests(TestCase):
+    """Every signup path (client, local pro, supplier, Google) requires a
+    photo ID, stored once on User; add-role forms only ask when the account
+    has none yet."""
+
+    CLIENT_DATA = {
+        'first_name': 'Photo', 'last_name': 'Id', 'email': 'photo-id-client@example.com',
+        'mobile': '+679 123 4567', 'town': 'Suva', 'date_of_birth': '2000-01-01',
+        'password': 'pass12345', 'password_confirm': 'pass12345', 'accepted_terms': 'on',
+    }
+
+    def test_client_signup_without_photo_id_is_rejected(self):
+        response = self.client.post(reverse('register_client'), self.CLIENT_DATA, secure=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('photo_id', response.context['form'].errors)
+        self.assertFalse(User.objects.filter(email='photo-id-client@example.com').exists())
+
+    def test_client_signup_page_shows_photo_id_upload(self):
+        response = self.client.get(reverse('register_client'), secure=True)
+        self.assertContains(response, 'Photo ID')
+        self.assertContains(response, 'enctype="multipart/form-data"')
+
+    def test_client_signup_with_photo_id_saves_it_on_the_user(self):
+        response = self.client.post(
+            reverse('register_client'), {**self.CLIENT_DATA, 'photo_id': _photo_id_upload()}, secure=True,
+        )
+        self.assertEqual(response.status_code, 302)
+        user = User.objects.get(email='photo-id-client@example.com')
+        self.assertTrue(user.photo_id.name.startswith('identity_documents/'))
+
+    def test_photo_id_rejects_unsupported_file_types(self):
+        from .forms import ClientRegistrationForm
+        bad = SimpleUploadedFile('id.exe', b'MZ', content_type='application/octet-stream')
+        form = ClientRegistrationForm(data=self.CLIENT_DATA, files={'photo_id': bad})
+        self.assertFalse(form.is_valid())
+        self.assertIn('photo_id', form.errors)
+
+    def test_tradie_and_supplier_signup_forms_require_photo_id(self):
+        from .forms import SupplierRegistrationForm, TradieRegistrationForm
+        for form_class in (TradieRegistrationForm, SupplierRegistrationForm):
+            form = form_class(data={}, files={})
+            self.assertFalse(form.is_valid())
+            self.assertIn('photo_id', form.errors, form_class.__name__)
+
+    def _add_role_user(self, **extra):
+        user = User.objects.create_user(
+            email='photo-addrole@example.com', password='pass12345',
+            first_name='Add', last_name='Role', role=User.ROLE_CLIENT, town='Suva', **extra,
+        )
+        workspaces.create_client_workspace(user)
+        return user
+
+    def _add_role_data(self, user):
+        return {
+            'email': user.email, 'use_same_credentials': 'on', 'password': 'pass12345',
+            'business_name': '', 'tin': '', 'years_experience': '1-3 years', 'bio': 'Bio',
+            'trades': ['cleaning'], 'service_towns': ['Suva'],
+            'accepted_platform_circumvention': 'on', 'accepted_invoicing_terms': 'on',
+        }
+
+    def _tin(self):
+        return SimpleUploadedFile('tin.pdf', b'%PDF-1.4', content_type='application/pdf')
+
+    def test_add_role_requires_photo_id_when_account_has_none(self):
+        from .forms import AddTradieRoleForm
+        user = self._add_role_user()
+        form = AddTradieRoleForm(data=self._add_role_data(user), files={'tin_letter': self._tin()}, user=user)
+        self.assertFalse(form.is_valid())
+        self.assertIn('photo_id', form.errors)
+
+    def test_add_role_saves_uploaded_photo_id_to_the_user(self):
+        from .forms import AddTradieRoleForm
+        user = self._add_role_user()
+        form = AddTradieRoleForm(
+            data=self._add_role_data(user),
+            files={'tin_letter': self._tin(), 'photo_id': _photo_id_upload()}, user=user,
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        form.save()
+        user.refresh_from_db()
+        self.assertTrue(user.photo_id)
+
+    def test_add_role_reuses_existing_photo_id(self):
+        from .forms import AddTradieRoleForm
+        user = self._add_role_user(photo_id=_photo_id_upload())
+        form = AddTradieRoleForm(data=self._add_role_data(user), files={'tin_letter': self._tin()}, user=user)
+        self.assertTrue(form.reused_photo_id)
+        self.assertTrue(form.is_valid(), form.errors)
+
+    @override_settings(
+        STORAGES={
+            'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
+            'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
+        }
+    )
+    def test_deleting_account_deletes_photo_id(self):
+        user = self._add_role_user(photo_id=_photo_id_upload())
+        self.client.login(username=user.email, password='pass12345')
+        response = self.client.post(reverse('delete_account'), {'password': 'pass12345', 'confirm': 'on'}, secure=True)
+        self.assertEqual(response.status_code, 302)
+        user.refresh_from_db()
+        self.assertFalse(user.photo_id)
