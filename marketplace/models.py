@@ -96,6 +96,12 @@ class User(AbstractUser):
     # TESTER_REWARD_SLOTS testers to finish the 14-day tutorial get this
     # credit, spent down automatically against any platform fee they're
     # charged (job success fees and Market fees) after any other discount.
+    # Shows the "Are you an app tester?" welcome bubble on the user's next
+    # page view until they answer it. Set at signup, or by an admin from the
+    # Users list ("Show app tester welcome bubble") for existing accounts.
+    show_tester_welcome = models.BooleanField(
+        default=False, verbose_name='Show app tester welcome bubble on next visit',
+    )
     tester_fee_credit_balance = models.DecimalField(
         max_digits=10, decimal_places=2, default=Decimal('0.00'),
         verbose_name='App tester platform fee credit balance (FJD)',

@@ -142,14 +142,15 @@ class UserAdmin(BaseUserAdmin):
     list_display = ['email', 'first_name', 'last_name', 'role', 'town', 'has_photo_id', 'is_tester', 'is_market_founding_member', 'is_active', 'date_joined', 'accepted_terms_display']
     list_filter  = ['role', 'town', 'is_tester', 'is_market_founding_member', 'is_active', HasAcceptedTermsFilter]
     search_fields = ['email', 'first_name', 'last_name']
-    actions = ['grant_tester_access', 'revoke_tester_access', 'migrate_to_local_pro']
+    actions = ['grant_tester_access', 'revoke_tester_access', 'show_app_tester_welcome',
+               'enrol_app_tester', 'migrate_to_local_pro']
     readonly_fields = ['account_deleted_at', 'photo_id_link']
     inlines = [SocialAccountInline]
     fieldsets = (
         (None,           {'fields': ('email', 'password')}),
         ('Personal',     {'fields': ('first_name', 'last_name', 'mobile', 'town', 'role')}),
         ('Identity',     {'fields': ('photo_id', 'photo_id_link'), 'description': 'Required at signup for every account type. Accounts created before photo ID was required may have none.'}),
-        ('Beta Access',  {'fields': ('is_tester',), 'description': 'Testers can preview features gated behind an unlaunched-feature flag (e.g. supplier accounts) before general availability.'}),
+        ('Beta Access',  {'fields': ('is_tester', 'show_tester_welcome'), 'description': 'Beta testers can preview features gated behind an unlaunched-feature flag (e.g. supplier accounts) before general availability. "Show app tester welcome bubble" asks this user "Are you an app tester?" on their next visit; it switches itself off once they answer.'}),
         ('Market Founding Seller', {'fields': ('is_market_founding_member', 'market_founding_credit_balance')}),
         ('App Tester Reward', {'fields': ('tester_fee_credit_balance',), 'description': 'Given automatically to the first testers to finish the 14-day tutorial; spent down against job and Market platform fees.'}),
         ('Permissions',  {'fields': ('is_active', 'is_staff', 'is_superuser', 'groups', 'user_permissions')}),
@@ -180,6 +181,18 @@ class UserAdmin(BaseUserAdmin):
     def revoke_tester_access(self, request, queryset):
         updated = queryset.update(is_tester=False)
         messages.success(request, f'Revoked tester access from {updated} user(s).')
+
+    @admin.action(description='Show app tester welcome bubble on next visit')
+    def show_app_tester_welcome(self, request, queryset):
+        updated = tester_program.show_welcome_bubble(queryset)
+        skipped = queryset.count() - updated
+        note = f' Skipped {skipped} already enrolled or finished.' if skipped else ''
+        messages.success(request, f'The app tester welcome bubble will show to {updated} user(s) on their next visit.{note}')
+
+    @admin.action(description='Enrol in 14-day app tester tutorial now (sends confirmation + Day 1 task)')
+    def enrol_app_tester(self, request, queryset):
+        enrolled = sum(1 for u in queryset if tester_program.enrol_user(u, enrolled_by=request.user))
+        messages.success(request, f'Enrolled {enrolled} user(s) in the app tester tutorial. Anyone already enrolled was left as they were.')
 
     @admin.action(description='Migrate to Local Pro (one at a time)')
     def migrate_to_local_pro(self, request, queryset):
@@ -1765,7 +1778,7 @@ class TesterEnrolmentAdmin(admin.ModelAdmin):
               'admin_notes', 'progress_summary', 'requested_at', 'enrolled_at', 'enrolled_by',
               'start_date', 'last_task_notified_day', 'reward_credit_awarded_at']
     inlines = [TesterTaskCompletionInline]
-    actions = ['enrol_testers', 'decline_testers']
+    actions = ['enrol_testers', 'decline_testers', 'restart_testers']
 
     @admin.display(boolean=True, description=f'Got ${TESTER_REWARD_CREDIT:,.0f} credit')
     def rewarded(self, obj):
@@ -1832,6 +1845,11 @@ class TesterEnrolmentAdmin(admin.ModelAdmin):
     def enrol_testers(self, request, queryset):
         enrolled = sum(1 for e in queryset.select_related('user') if tester_program.enrol(e, enrolled_by=request.user))
         messages.success(request, f'Enrolled {enrolled} tester(s). Already-enrolled testers were left as they were.')
+
+    @admin.action(description='Restart from Day 1 today (clears progress, for testing)')
+    def restart_testers(self, request, queryset):
+        restarted = sum(1 for e in queryset.select_related('user') if tester_program.restart(e, enrolled_by=request.user))
+        messages.success(request, f'Restarted {restarted} tester(s) from Day 1.')
 
     @admin.action(description='Decline app tester status')
     def decline_testers(self, request, queryset):

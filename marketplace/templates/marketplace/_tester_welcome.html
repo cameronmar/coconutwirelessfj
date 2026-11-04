@@ -1,6 +1,6 @@
 {% comment %}
 Post-signup welcome bubble (context_processors.tester_welcome). Step 1 asks
-"Are you an app tester?"; "No" swaps to step 2, which asks whether they'd
+"Are you an app tester and have you submitted your Google Play email?"; "No" swaps to step 2, which asks whether they'd
 like to be one, lists the requirements to tick, and states the reward.
 Each answer posts to tester_welcome, which dismisses the bubble.
 {% endcomment %}
@@ -26,7 +26,7 @@ Each answer posts to tester_welcome, which dismisses the bubble.
 
     <div id="twStep1">
       <h3 id="twTitle">Bula{% if user.first_name %} {{ user.first_name }}{% endif %}, welcome! 🥥</h3>
-      <p>Are you an app tester for the Coconut Wireless app?</p>
+      <p>Are you an app tester and have you submitted your Google Play email to our support team?</p>
       <div class="tw-actions">
         <button type="submit" name="choice" value="yes" class="btn btn-primary" formnovalidate>Yes, I'm a tester</button>
         <button type="button" class="btn btn-outline-blue" id="twNo">No</button>

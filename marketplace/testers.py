@@ -2,8 +2,9 @@
 App tester program — the 14-day engagement tutorial.
 
 Flow:
-  1. Right after signup, a welcome bubble (queue_welcome_prompt) asks "Are
-     you an app tester?". Yes → request_enrolment(). No → "Do you want to be
+  1. Right after signup (or when an admin uses "Show app tester welcome
+     bubble" on existing users), a welcome bubble asks "Are you an app
+     tester and have you submitted your Google Play email?". Yes → request_enrolment(). No → "Do you want to be
      one?" with the requirements to tick (email linked to Google Play, an
      Android device) and the reward: the first TESTER_REWARD_SLOTS to finish
      get TESTER_REWARD_CREDIT off all platform fees. Either yes creates a
@@ -33,13 +34,24 @@ from .models import (
     PlatformNotice, PlatformSettings, TesterEnrolment, TesterTask, TesterTaskCompletion, User,
 )
 
-WELCOME_PROMPT_SESSION_KEY = 'tester_welcome_prompt'
-
-
 def queue_welcome_prompt(request):
     """Called by every signup view: show the "Are you an app tester?"
     welcome bubble on the next page the new user lands on."""
-    request.session[WELCOME_PROMPT_SESSION_KEY] = True
+    show_welcome_bubble(User.objects.filter(pk=request.user.pk))
+
+
+def show_welcome_bubble(users):
+    """Queue the welcome bubble for these users (admin action for people
+    who signed up before the program, or for testing it yourself). Users
+    already enrolled or finished are skipped. Returns how many were set."""
+    return users.exclude(
+        tester_enrolment__status__in=[TesterEnrolment.STATUS_ENROLLED, TesterEnrolment.STATUS_COMPLETED],
+    ).update(show_tester_welcome=True)
+
+
+def dismiss_welcome_bubble(user):
+    User.objects.filter(pk=user.pk).update(show_tester_welcome=False)
+    user.show_tester_welcome = False
 
 
 def reward_slots_remaining():
@@ -77,7 +89,7 @@ def request_enrolment(user, request=None, source=TesterEnrolment.SOURCE_INVITED,
             'is linked to their Google Play account and that they have an Android device'
         )
     else:
-        how = 'says they are an app tester'
+        how = 'says they are an app tester and have submitted their Google Play email to the support team'
 
     def yn(value):
         return 'yes' if value else 'not confirmed'
@@ -99,6 +111,26 @@ def request_enrolment(user, request=None, source=TesterEnrolment.SOURCE_INVITED,
         ),
     )
     return enrolment
+
+
+def enrol_user(user, enrolled_by=None):
+    """Admin shortcut: put an existing user straight on the tutorial (no
+    bubble, no request step). Returns True if they were newly enrolled."""
+    enrolment, _ = TesterEnrolment.objects.get_or_create(
+        user=user, defaults={'source': TesterEnrolment.SOURCE_ADMIN},
+    )
+    dismiss_welcome_bubble(user)
+    return enrol(enrolment, enrolled_by=enrolled_by)
+
+
+def restart(enrolment, enrolled_by=None):
+    """Wipe a tester's progress and start again from Day 1 today — handy
+    when testing the tutorial on your own account. Any reward credit
+    already given is left alone."""
+    enrolment.completions.all().delete()
+    enrolment.status = TesterEnrolment.STATUS_REQUESTED
+    enrolment.save(update_fields=['status'])
+    return enrol(enrolment, enrolled_by=enrolled_by)
 
 
 def enrol(enrolment, enrolled_by=None):
@@ -172,13 +204,16 @@ def complete_task(enrolment, task, feedback=''):
             and len(enrolment.completed_days()) >= TESTER_PROGRAM_DAYS):
         enrolment.status = TesterEnrolment.STATUS_COMPLETED
         enrolment.save(update_fields=['status'])
-        rewarded = _award_reward_if_slot_left(enrolment)
-        reward_line = (
-            f'They were one of the first {TESTER_REWARD_SLOTS} and have been given the '
-            f'FJD ${TESTER_REWARD_CREDIT:,.0f} platform fee credit.'
-            if rewarded else
-            f'All {TESTER_REWARD_SLOTS} reward credits were already given out, so no credit was added.'
-        )
+        if enrolment.user.is_staff:
+            # Admins testing the tutorial on their own account don't use up a reward slot.
+            reward_line = 'This is a staff account, so no reward credit was added and no reward slot was used.'
+        elif _award_reward_if_slot_left(enrolment):
+            reward_line = (
+                f'They were one of the first {TESTER_REWARD_SLOTS} and have been given the '
+                f'FJD ${TESTER_REWARD_CREDIT:,.0f} platform fee credit.'
+            )
+        else:
+            reward_line = f'All {TESTER_REWARD_SLOTS} reward credits were already given out, so no credit was added.'
         notify_admin(
             subject=f'App tester finished the {TESTER_PROGRAM_DAYS}-day tutorial: {enrolment.user.full_name}',
             body=(

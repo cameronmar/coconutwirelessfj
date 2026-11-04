@@ -69,12 +69,10 @@ def header_counts(request):
 
 def tester_welcome(request):
     """Whether to show the post-signup "Are you an app tester?" welcome
-    bubble (queued by testers.queue_welcome_prompt at signup)."""
-    from . import testers
+    bubble — queued at signup, or by an admin for existing users."""
     from .models import TESTER_REWARD_CREDIT, TESTER_REWARD_SLOTS
     user = getattr(request, 'user', None)
-    session = getattr(request, 'session', None)
-    if not (user and user.is_authenticated and session and session.get(testers.WELCOME_PROMPT_SESSION_KEY)):
+    if not (user and user.is_authenticated and user.show_tester_welcome):
         return {}
     return {
         'show_tester_welcome': True,

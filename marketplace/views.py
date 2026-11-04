@@ -1987,7 +1987,7 @@ def tester_welcome(request):
         testers.request_enrolment(request.user, request, source=TesterEnrolment.SOURCE_INVITED)
     elif choice != 'no_thanks':
         return redirect(back)
-    request.session.pop(testers.WELCOME_PROMPT_SESSION_KEY, None)
+    testers.dismiss_welcome_bubble(request.user)
     if choice in ('yes', 'join'):
         flash.success(request, "Vinaka! We'll confirm your app tester status and let you know when your 14 days start.")
     return redirect(back)
