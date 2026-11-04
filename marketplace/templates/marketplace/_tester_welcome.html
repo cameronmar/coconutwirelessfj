@@ -1,0 +1,61 @@
+{% comment %}
+Post-signup welcome bubble (context_processors.tester_welcome). Step 1 asks
+"Are you an app tester and have you submitted your Google Play email?"; "No" swaps to step 2, which asks whether they'd
+like to be one, lists the requirements to tick, and states the reward.
+Each answer posts to tester_welcome, which dismisses the bubble.
+{% endcomment %}
+<style>
+.tw-bubble{position:fixed;right:20px;bottom:20px;z-index:1000;width:360px;max-width:calc(100vw - 32px);background:var(--white);border-radius:16px;box-shadow:0 10px 40px rgba(0,50,80,.25);padding:20px 20px 18px;font-size:.9rem;line-height:1.5;}
+.tw-bubble h3{margin:0 0 6px;font-size:1.1rem;}
+.tw-bubble p{margin:0 0 12px;color:var(--muted);}
+.tw-close{position:absolute;top:8px;right:10px;background:none;border:none;font-size:1.3rem;line-height:1;cursor:pointer;color:var(--muted);padding:4px;}
+.tw-actions{display:flex;gap:8px;flex-wrap:wrap;}
+.tw-actions .btn{flex:1;min-width:120px;padding:10px;}
+.tw-link{background:none;border:none;color:var(--muted);text-decoration:underline;cursor:pointer;font-size:.82rem;padding:8px 0 0;width:100%;}
+.tw-req{list-style:none;padding:0;margin:0 0 12px;}
+.tw-req li{display:flex;gap:10px;align-items:flex-start;margin-bottom:8px;}
+.tw-req input{margin-top:3px;accent-color:var(--blue);}
+.tw-reward{background:#fff7e0;border:1px solid #ffe2a8;border-radius:10px;padding:10px 12px;margin:0 0 14px;font-size:.85rem;color:var(--text);}
+@media (max-width:480px){.tw-bubble{right:16px;left:16px;bottom:16px;width:auto;max-width:none;}}
+</style>
+<div class="tw-bubble" role="dialog" aria-labelledby="twTitle" id="testerWelcome">
+  <form method="post" action="{% url 'tester_welcome' %}">
+    {% csrf_token %}
+    <input type="hidden" name="next" value="{{ request.get_full_path }}">
+    <button type="submit" name="choice" value="no_thanks" class="tw-close" aria-label="Close" formnovalidate>×</button>
+
+    <div id="twStep1">
+      <h3 id="twTitle">Bula{% if user.first_name %} {{ user.first_name }}{% endif %}, welcome! 🥥</h3>
+      <p>Are you an app tester and have you submitted your Google Play email to our support team?</p>
+      <div class="tw-actions">
+        <button type="submit" name="choice" value="yes" class="btn btn-primary" formnovalidate>Yes, I'm a tester</button>
+        <button type="button" class="btn btn-outline-blue" id="twNo">No</button>
+      </div>
+    </div>
+
+    <div id="twStep2" hidden>
+      <h3>Do you want to be an app tester?</h3>
+      <p>Help us launch on Google Play by using the app for 14 days in a row — one short task a day.</p>
+      <div class="tw-reward">🎁 The first <strong>{{ tester_reward_slots }}</strong> testers to complete all 14 days get a <strong>FJD ${{ tester_reward_credit }} credit on all platform fees</strong>.</div>
+      <p style="margin-bottom:6px;color:var(--text);font-weight:600;">To be a tester you need:</p>
+      <ul class="tw-req">
+        <li><input type="checkbox" name="confirmed_play_email" id="twPlay" required><label for="twPlay">The email I signed up with is linked to my Google Play account</label></li>
+        <li><input type="checkbox" name="confirmed_android_device" id="twAndroid" required><label for="twAndroid">I have an Android phone or tablet</label></li>
+      </ul>
+      <div class="tw-actions">
+        <button type="submit" name="choice" value="join" class="btn btn-primary">Yes, sign me up</button>
+      </div>
+      <button type="submit" name="choice" value="no_thanks" class="tw-link" formnovalidate>No thanks</button>
+    </div>
+  </form>
+</div>
+<script>
+(function(){
+  var no = document.getElementById('twNo');
+  if (!no) return;
+  no.addEventListener('click', function(){
+    document.getElementById('twStep1').hidden = true;
+    document.getElementById('twStep2').hidden = false;
+  });
+})();
+</script>

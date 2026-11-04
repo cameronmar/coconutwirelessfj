@@ -348,6 +348,11 @@ def create_platform_fee_for_task(task, final_job_value):
                     promo.times_used = F('times_used') + 1
                     promo.save(update_fields=['times_used'])
 
+        # App tester reward credit comes off whatever is left after the
+        # founding credit / promo code.
+        from .testers import apply_fee_credit
+        discount_amount += apply_fee_credit(task.assigned_tradie_id, gross_fee_amount - discount_amount)
+
         fee_amount = gross_fee_amount - discount_amount
 
         platform_fee = PlatformFee.objects.create(

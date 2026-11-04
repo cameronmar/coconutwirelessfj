@@ -134,6 +134,7 @@ TEMPLATES = [
                 'marketplace.context_processors.google_login',
                 'marketplace.context_processors.minor_session',
                 'marketplace.context_processors.header_counts',
+                'marketplace.context_processors.tester_welcome',
             ],
         },
     },
@@ -272,6 +273,11 @@ if IS_PRODUCTION:
 # forgetting to set it degrades to "no notification sent" rather than
 # crashing the whole app on startup.
 ADMIN_EMAIL = os.environ.get('ADMIN_EMAIL', '').strip()
+
+# Public base URL (e.g. https://coconutwireless.fj) for links in emails sent
+# outside a request — the app tester daily-task cron has no request to build
+# an absolute URL from. Optional: without it, emails show the in-app path.
+SITE_URL = os.environ.get('SITE_URL', '').strip().rstrip('/')
 
 # Designated child safety contact (Terms §13.7 / Child Safety Standard) —
 # urgent child-safety reports route here instead of ADMIN_EMAIL.

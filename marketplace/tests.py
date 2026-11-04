@@ -62,10 +62,25 @@ from .utils import (
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
+# Tests that upload files must not hit the real (S3/R2) storage that CI's
+# production-like settings configure — keep uploads in memory instead.
+IN_MEMORY_STORAGES = {
+    'default': {'BACKEND': 'django.core.files.storage.InMemoryStorage'},
+    'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
+}
+
+
 def _photo_id_upload():
     """A valid photo ID upload — required by every signup/add-role form."""
     return SimpleUploadedFile('photo-id.jpg', b'fake-jpeg-bytes', content_type='image/jpeg')
 
+
+@override_settings(
+    STORAGES={
+        'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
+        'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
+    }
+)
 class CriticalPathViewsTests(TestCase):
     def test_home_page_returns_200(self):
         response = self.client.get('/', secure=True)
@@ -4635,12 +4650,7 @@ class DeleteTaskTests(TestCase):
         self.assertIsNone(self.task.removed_at)
 
 
-@override_settings(
-    STORAGES={
-        'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
-        'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
-    }
-)
+@override_settings(STORAGES=IN_MEMORY_STORAGES)
 class PhotoIdRequirementTests(TestCase):
     """Every signup path (client, local pro, supplier, Google) requires a
     photo ID, stored once on User; add-role forms only ask when the account
@@ -4743,3 +4753,332 @@ class PhotoIdRequirementTests(TestCase):
         self.assertEqual(response.status_code, 302)
         user.refresh_from_db()
         self.assertFalse(user.photo_id)
+
+
+@override_settings(ADMIN_EMAIL='admin@example.com', STORAGES=IN_MEMORY_STORAGES)
+class AppTesterProgramTests(TestCase):
+    """14-day app tester tutorial: signup opt-in -> admin confirmation email ->
+    admin enrols -> enrolment + daily task notices -> tester marks tasks done."""
+
+    SIGNUP = {
+        'first_name': 'Tess', 'last_name': 'Ter', 'email': 'tester@example.com',
+        'mobile': '+679 123 4567', 'town': 'Suva', 'date_of_birth': '2000-01-01',
+        'password': 'pass12345', 'password_confirm': 'pass12345', 'accepted_terms': 'on',
+    }
+
+    def setUp(self):
+        from .models import TesterTask
+        self.assertEqual(TesterTask.objects.count(), 14)  # seeded by migration 0062
+        self.admin_user = User.objects.create_superuser(email='boss@example.com', password='pass12345')
+
+    def _make_tester(self, email='t2@example.com'):
+        from .models import TesterEnrolment
+        user = User.objects.create_user(email=email, password='pass12345', first_name='T', role=User.ROLE_CLIENT)
+        return TesterEnrolment.objects.create(user=user)
+
+    def _signup(self):
+        response = self.client.post(
+            reverse('register_client'), {**self.SIGNUP, 'photo_id': _photo_id_upload()}, secure=True,
+        )
+        self.assertEqual(response.status_code, 302)
+        return User.objects.get(email='tester@example.com')
+
+    def test_signup_form_has_no_tester_question(self):
+        response = self.client.get(reverse('register_client'), secure=True)
+        self.assertNotContains(response, 'Are you an app tester')
+
+    def test_welcome_bubble_shows_after_signup_with_reward_and_requirements(self):
+        self._signup()
+        response = self.client.get(reverse('client_dashboard'), secure=True)
+        self.assertContains(response, 'Are you an app tester')
+        self.assertContains(response, 'Do you want to be an app tester?')
+        self.assertContains(response, 'linked to my Google Play account')
+        self.assertContains(response, 'I have an Android phone or tablet')
+        self.assertContains(response, 'first <strong>15</strong> testers')
+        self.assertContains(response, 'FJD $1,000 credit on all platform fees')
+
+    def test_bubble_not_shown_to_existing_users(self):
+        User.objects.create_user(email='old@example.com', password='pass12345', role=User.ROLE_CLIENT)
+        self.client.login(username='old@example.com', password='pass12345')
+        response = self.client.get(reverse('client_dashboard'), secure=True)
+        self.assertNotContains(response, 'Are you an app tester')
+
+    def test_bubble_yes_requests_enrolment_emails_admin_and_dismisses(self):
+        from django.core import mail
+        from .models import TesterEnrolment
+        user = self._signup()
+        response = self.client.post(
+            reverse('tester_welcome'), {'choice': 'yes', 'next': reverse('client_dashboard')}, secure=True,
+        )
+        self.assertRedirects(response, reverse('client_dashboard'), fetch_redirect_response=False)
+        enrolment = TesterEnrolment.objects.get(user=user)
+        self.assertEqual(enrolment.status, TesterEnrolment.STATUS_REQUESTED)
+        self.assertEqual(enrolment.source, TesterEnrolment.SOURCE_INVITED)
+        admin_mail = [m for m in mail.outbox if m.to == ['admin@example.com']]
+        self.assertEqual(len(admin_mail), 1)
+        self.assertIn('Confirm app tester status', admin_mail[0].subject)
+        self.assertIn(f'/testerenrolment/{enrolment.pk}/change/', admin_mail[0].body)
+        self.assertNotContains(self.client.get(reverse('client_dashboard'), secure=True), 'Are you an app tester')
+
+    def test_bubble_join_requires_both_requirements(self):
+        from .models import TesterEnrolment
+        user = self._signup()
+        self.client.post(reverse('tester_welcome'), {'choice': 'join', 'confirmed_play_email': 'on'}, secure=True)
+        self.assertFalse(TesterEnrolment.objects.exists())
+        self.assertContains(self.client.get(reverse('client_dashboard'), secure=True), 'Are you an app tester')
+        self.client.post(reverse('tester_welcome'), {
+            'choice': 'join', 'confirmed_play_email': 'on', 'confirmed_android_device': 'on',
+        }, secure=True)
+        enrolment = TesterEnrolment.objects.get(user=user)
+        self.assertEqual(enrolment.source, TesterEnrolment.SOURCE_VOLUNTEER)
+        self.assertTrue(enrolment.confirmed_play_email and enrolment.confirmed_android_device)
+
+    def test_bubble_no_thanks_dismisses_without_enrolment(self):
+        from .models import TesterEnrolment
+        self._signup()
+        self.client.post(reverse('tester_welcome'), {'choice': 'no_thanks'}, secure=True)
+        self.assertFalse(TesterEnrolment.objects.exists())
+        self.assertNotContains(self.client.get(reverse('client_dashboard'), secure=True), 'Are you an app tester')
+
+    def _finish_all_days(self, enrolment):
+        from datetime import timedelta
+        from .models import TesterTask
+        from .testers import complete_task, enrol
+        enrol(enrolment)
+        enrolment.start_date = django_timezone.localdate() - timedelta(days=13)
+        enrolment.save()
+        for task in TesterTask.objects.all():
+            complete_task(enrolment, task)
+        enrolment.refresh_from_db()
+        enrolment.user.refresh_from_db()
+
+    def test_first_15_finishers_get_credit_then_no_more(self):
+        from decimal import Decimal
+        from .models import PlatformSettings, TesterEnrolment
+        PlatformSettings.objects.get_or_create(pk=1)
+        for i in range(14):
+            other = self._make_tester(f'done{i}@example.com')
+            TesterEnrolment.objects.filter(pk=other.pk).update(reward_credit_awarded_at=django_timezone.now())
+        fifteenth = self._make_tester('fifteenth@example.com')
+        self._finish_all_days(fifteenth)
+        self.assertIsNotNone(fifteenth.reward_credit_awarded_at)
+        self.assertEqual(fifteenth.user.tester_fee_credit_balance, Decimal('1000.00'))
+        sixteenth = self._make_tester('sixteenth@example.com')
+        self._finish_all_days(sixteenth)
+        self.assertEqual(sixteenth.status, TesterEnrolment.STATUS_COMPLETED)
+        self.assertIsNone(sixteenth.reward_credit_awarded_at)
+        self.assertEqual(sixteenth.user.tester_fee_credit_balance, Decimal('0.00'))
+
+    def test_fee_credit_is_spent_down(self):
+        from decimal import Decimal
+        from .testers import apply_fee_credit
+        user = self._make_tester().user
+        user.tester_fee_credit_balance = Decimal('30.00')
+        user.save()
+        self.assertEqual(apply_fee_credit(user.pk, Decimal('20.00')), Decimal('20.00'))
+        self.assertEqual(apply_fee_credit(user.pk, Decimal('25.00')), Decimal('10.00'))
+        self.assertEqual(apply_fee_credit(user.pk, Decimal('5.00')), Decimal('0.00'))
+        user.refresh_from_db()
+        self.assertEqual(user.tester_fee_credit_balance, Decimal('0.00'))
+
+    def test_enrol_sends_confirmation_and_day_one_task(self):
+        from .models import PlatformNotice, TesterEnrolment
+        from .testers import enrol
+        enrolment = self._make_tester()
+        self.assertTrue(enrol(enrolment, enrolled_by=self.admin_user))
+        enrolment.refresh_from_db()
+        self.assertEqual(enrolment.status, TesterEnrolment.STATUS_ENROLLED)
+        self.assertEqual(enrolment.start_date, django_timezone.localdate())
+        self.assertEqual(enrolment.last_task_notified_day, 1)
+        in_app = PlatformNotice.objects.filter(recipient=enrolment.user, channel=PlatformNotice.CHANNEL_IN_PLATFORM)
+        self.assertTrue(in_app.filter(notice_type=PlatformNotice.TYPE_TESTER_ENROLLED).exists())
+        self.assertTrue(in_app.filter(notice_type=PlatformNotice.TYPE_TESTER_DAILY_TASK, subject__contains='day 1 of 14').exists())
+        self.assertFalse(enrol(enrolment))  # idempotent
+
+    def test_daily_task_sent_once_per_day_and_advances(self):
+        from datetime import timedelta
+        from .models import PlatformNotice
+        from .testers import enrol, send_due_task
+        enrolment = self._make_tester()
+        enrol(enrolment)
+        today = django_timezone.localdate()
+        self.assertFalse(send_due_task(enrolment, today))  # day 1 already sent on enrol
+        self.assertTrue(send_due_task(enrolment, today + timedelta(days=1)))
+        self.assertFalse(send_due_task(enrolment, today + timedelta(days=1)))
+        self.assertTrue(send_due_task(enrolment, today + timedelta(days=5)))  # no backlog of missed days
+        self.assertEqual(enrolment.last_task_notified_day, 6)
+        self.assertEqual(PlatformNotice.objects.filter(
+            recipient=enrolment.user, notice_type=PlatformNotice.TYPE_TESTER_DAILY_TASK,
+            channel=PlatformNotice.CHANNEL_IN_PLATFORM).count(), 3)
+
+    def test_requested_testers_get_no_daily_tasks(self):
+        from .testers import send_due_task
+        self.assertFalse(send_due_task(self._make_tester()))
+
+    def test_daily_command_sends_due_tasks(self):
+        from datetime import timedelta
+        from .testers import enrol
+        enrolment = self._make_tester()
+        enrol(enrolment)
+        enrolment.start_date = django_timezone.localdate() - timedelta(days=1)
+        enrolment.save()
+        out = StringIO()
+        call_command('send_tester_daily_tasks', stdout=out)
+        self.assertIn('Sent 1', out.getvalue())
+        enrolment.refresh_from_db()
+        self.assertEqual(enrolment.last_task_notified_day, 2)
+
+    def test_complete_task_rules_streak_and_completion(self):
+        from datetime import datetime, time, timedelta
+        from .models import TesterEnrolment, TesterTask, TesterTaskCompletion
+        from .testers import complete_task, enrol
+        enrolment = self._make_tester()
+        enrol(enrolment)
+        self.assertIsNone(complete_task(enrolment, TesterTask.objects.get(day=2)))  # locked
+        # Tutorial started 13 days ago (today is day 14); days 1-13 were each
+        # done on the day, then day 14 is done now.
+        start = django_timezone.localdate() - timedelta(days=13)
+        enrolment.start_date = start
+        enrolment.save()
+        for task in TesterTask.objects.filter(day__lte=13):
+            c = complete_task(enrolment, task, feedback=f'day {task.day} ok')
+            when = django_timezone.make_aware(datetime.combine(start + timedelta(days=task.day - 1), time(12)))
+            TesterTaskCompletion.objects.filter(pk=c.pk).update(completed_at=when)
+        self.assertEqual(enrolment.streak(), 13)
+        complete_task(enrolment, TesterTask.objects.get(day=14))
+        enrolment.refresh_from_db()
+        self.assertEqual(enrolment.status, TesterEnrolment.STATUS_COMPLETED)
+        self.assertEqual(enrolment.streak(), 14)
+        self.assertEqual(len(enrolment.on_time_days()), 14)
+
+    def test_tutorial_page_and_mark_done(self):
+        from .testers import enrol
+        enrolment = self._make_tester()
+        self.client.login(username=enrolment.user.email, password='pass12345')
+        response = self.client.get(reverse('tester_tutorial'), secure=True)
+        self.assertContains(response, 'confirming your tester status')
+        enrol(enrolment)
+        response = self.client.get(reverse('tester_tutorial'), secure=True)
+        self.assertContains(response, 'Install the app and sign in')
+        self.assertContains(response, 'Mark as done')
+        response = self.client.post(reverse('tester_complete_task', args=[1]), {'feedback': 'Smooth'}, secure=True)
+        self.assertRedirects(response, reverse('tester_tutorial'), fetch_redirect_response=False)
+        self.assertEqual(enrolment.completions.get().feedback, 'Smooth')
+        self.client.post(reverse('tester_complete_task', args=[3]), secure=True)  # locked
+        self.assertEqual(enrolment.completions.count(), 1)
+
+    def test_tutorial_page_404s_for_non_testers(self):
+        User.objects.create_user(email='plain@example.com', password='pass12345')
+        self.client.login(username='plain@example.com', password='pass12345')
+        self.assertEqual(self.client.get(reverse('tester_tutorial'), secure=True).status_code, 404)
+
+    def test_admin_enrol_action_and_saving_as_enrolled(self):
+        from .models import TesterEnrolment
+        a = self._make_tester('a@example.com')
+        b = self._make_tester('b@example.com')
+        self.client.login(username='boss@example.com', password='pass12345')
+        self.client.post(
+            reverse('admin:marketplace_testerenrolment_changelist'),
+            {'action': 'enrol_testers', '_selected_action': [a.pk]}, secure=True,
+        )
+        a.refresh_from_db()
+        self.assertEqual(a.status, TesterEnrolment.STATUS_ENROLLED)
+        self.assertEqual(a.enrolled_by, self.admin_user)
+        response = self.client.post(
+            reverse('admin:marketplace_testerenrolment_change', args=[b.pk]),
+            {'user': b.user.pk, 'status': TesterEnrolment.STATUS_ENROLLED, 'source': 'invited', 'admin_notes': '',
+             'completions-TOTAL_FORMS': '0', 'completions-INITIAL_FORMS': '0'},
+            secure=True,
+        )
+        self.assertEqual(response.status_code, 302)
+        b.refresh_from_db()
+        self.assertEqual(b.status, TesterEnrolment.STATUS_ENROLLED)
+        self.assertEqual(b.last_task_notified_day, 1)
+        for url in (reverse('admin:marketplace_testerenrolment_change', args=[b.pk]),
+                    reverse('admin:marketplace_testerenrolment_changelist')):
+            self.assertEqual(self.client.get(url, secure=True).status_code, 200)
+
+    def test_bubble_asks_about_google_play_email(self):
+        self._signup()
+        response = self.client.get(reverse('client_dashboard'), secure=True)
+        self.assertContains(
+            response, 'Are you an app tester and have you submitted your Google Play email to our support team?',
+        )
+
+    def test_admin_can_show_bubble_to_existing_user(self):
+        old = User.objects.create_user(email='old2@example.com', password='pass12345', role=User.ROLE_CLIENT)
+        enrolled = self._make_tester('enrolled@example.com')
+        from .testers import enrol
+        enrol(enrolled)
+        self.client.login(username='boss@example.com', password='pass12345')
+        self.client.post(
+            reverse('admin:marketplace_user_changelist'),
+            {'action': 'show_app_tester_welcome', '_selected_action': [old.pk, enrolled.user.pk]}, secure=True,
+        )
+        old.refresh_from_db()
+        enrolled.user.refresh_from_db()
+        self.assertTrue(old.show_tester_welcome)
+        self.assertFalse(enrolled.user.show_tester_welcome)  # already on the program
+        self.client.logout()
+        self.client.login(username='old2@example.com', password='pass12345')
+        self.assertContains(self.client.get(reverse('client_dashboard'), secure=True), 'Are you an app tester')
+        self.client.post(reverse('tester_welcome'), {'choice': 'no_thanks'}, secure=True)
+        old.refresh_from_db()
+        self.assertFalse(old.show_tester_welcome)
+
+    def test_admin_can_show_bubble_to_themselves(self):
+        self.client.login(username='boss@example.com', password='pass12345')
+        self.client.post(
+            reverse('admin:marketplace_user_changelist'),
+            {'action': 'show_app_tester_welcome', '_selected_action': [self.admin_user.pk]}, secure=True,
+        )
+        self.assertContains(self.client.get(reverse('home'), secure=True), 'Are you an app tester')
+
+    def test_admin_can_enrol_existing_user_directly(self):
+        from .models import PlatformNotice, TesterEnrolment
+        old = User.objects.create_user(email='old3@example.com', password='pass12345', role=User.ROLE_CLIENT)
+        self.client.login(username='boss@example.com', password='pass12345')
+        self.client.post(
+            reverse('admin:marketplace_user_changelist'),
+            {'action': 'enrol_app_tester', '_selected_action': [old.pk]}, secure=True,
+        )
+        enrolment = TesterEnrolment.objects.get(user=old)
+        self.assertEqual(enrolment.status, TesterEnrolment.STATUS_ENROLLED)
+        self.assertEqual(enrolment.source, TesterEnrolment.SOURCE_ADMIN)
+        self.assertEqual(enrolment.last_task_notified_day, 1)
+        self.assertTrue(PlatformNotice.objects.filter(recipient=old, notice_type=PlatformNotice.TYPE_TESTER_ENROLLED).exists())
+
+    def test_restart_clears_progress(self):
+        from .models import TesterEnrolment, TesterTask
+        from .testers import complete_task, enrol
+        enrolment = self._make_tester()
+        enrol(enrolment)
+        complete_task(enrolment, TesterTask.objects.get(day=1))
+        self.client.login(username='boss@example.com', password='pass12345')
+        self.client.post(
+            reverse('admin:marketplace_testerenrolment_changelist'),
+            {'action': 'restart_testers', '_selected_action': [enrolment.pk]}, secure=True,
+        )
+        enrolment.refresh_from_db()
+        self.assertEqual(enrolment.status, TesterEnrolment.STATUS_ENROLLED)
+        self.assertEqual(enrolment.completions.count(), 0)
+        self.assertEqual(enrolment.start_date, django_timezone.localdate())
+
+    def test_staff_finishing_does_not_use_a_reward_slot(self):
+        from decimal import Decimal
+        enrolment = self._make_tester('staffer@example.com')
+        enrolment.user.is_staff = True
+        enrolment.user.save()
+        self._finish_all_days(enrolment)
+        self.assertIsNone(enrolment.reward_credit_awarded_at)
+        self.assertEqual(enrolment.user.tester_fee_credit_balance, Decimal('0.00'))
+
+    def test_deleting_account_withdraws_enrolment(self):
+        from .models import TesterEnrolment
+        from .testers import enrol
+        enrolment = self._make_tester()
+        enrol(enrolment)
+        self.client.login(username=enrolment.user.email, password='pass12345')
+        self.client.post(reverse('delete_account'), {'password': 'pass12345', 'confirm': 'on'}, secure=True)
+        enrolment.refresh_from_db()
+        self.assertEqual(enrolment.status, TesterEnrolment.STATUS_WITHDRAWN)

@@ -61,3 +61,21 @@ Minimum review checklist for each provider:
 5. If Air Conditioning selected, air conditioning / refrigeration licence uploaded
 6. Business details and service towns look valid
 7. Verification notes updated in admin when rejecting/suspending
+
+## App tester program (14-day tutorial)
+
+Google Play needs closed-test testers using the app for 14 days in a row before production release.
+
+1. **Signup bubble.** Right after signing up, every new user sees a welcome bubble asking "Are you an app tester and have you submitted your Google Play email to our support team?". If they answer No, it asks whether they'd like to be one, lists the requirements to tick (email linked to their Google Play account, an Android device) and states the reward: the first 15 testers to finish all 14 days get FJD $1,000 credit on all platform fees.
+2. **Confirm.** Either yes emails `ADMIN_EMAIL` with "Confirm app tester status: <name>". Add their email to the Google Play closed test, then open **Admin → Tester Enrolments**, select them, and run **Enrol in 14-day tutorial**. You can also add a user directly with status "Enrolled". Enrolling sends an in-app, push and email confirmation, plus the Day 1 task.
+3. **Daily tasks.** Schedule `python manage.py send_tester_daily_tasks` once a day, for example as a Railway Cron Job at 8am Fiji time (`0 20 * * *` UTC). It sends each enrolled tester that day's task and never sends the same day twice.
+4. **Track.** Testers mark tasks done at `/testers/` (Account menu → App tester tasks). The enrolment list shows day, tasks done, tasks done on the day itself, and streak. Each enrolment page shows a 14-day grid plus any feedback testers left.
+5. **Reward.** Finishing all 14 tasks marks the enrolment Completed. While slots remain, it also adds the FJD $1,000 to `User.tester_fee_credit_balance`, which comes off job and Market platform fees automatically.
+
+**Existing users and testing it yourself.** In **Admin → Users**, select people (or yourself) and run:
+- **Show app tester welcome bubble on next visit**: they see the same bubble as a new signup the next time they open any page. You can also tick "Show app tester welcome bubble" on a user's page under Beta Access. It switches off once they answer.
+- **Enrol in 14-day app tester tutorial now**: skips the bubble and the confirm step, and starts them on Day 1 today.
+
+To run through it again, use **Restart from Day 1 today** in Tester Enrolments. Staff accounts never use up one of the 15 reward slots.
+
+Edit the 14 tasks under **Admin → Tester Tutorial Tasks**. Set `SITE_URL` (e.g. `https://your-domain`) so emails sent by the cron contain full links.

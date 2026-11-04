@@ -1,0 +1,73 @@
+{% extends "marketplace/base.html" %}
+{% block title %}App Tester Tasks – The Coconut Wireless Network{% endblock %}
+
+{% block extra_css %}
+<style>
+.tt-page{max-width:760px;margin:0 auto;padding:28px 16px 50px;}
+.tt-title{font-size:1.4rem;font-weight:700;margin:0 0 4px;}
+.tt-sub{color:var(--muted);font-size:.9rem;margin:0 0 20px;line-height:1.5;}
+.tt-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:22px;}
+.tt-stat{background:var(--white);border-radius:13px;box-shadow:0 3px 12px rgba(0,80,120,.07);padding:14px;text-align:center;}
+.tt-stat b{display:block;font-size:1.5rem;color:var(--blue);}
+.tt-stat span{font-size:.78rem;color:var(--muted);}
+.tt-bar{height:8px;border-radius:99px;background:var(--blue-light);overflow:hidden;margin:-10px 0 22px;}
+.tt-bar i{display:block;height:100%;background:var(--blue);}
+.tt-day{background:var(--white);border-radius:13px;box-shadow:0 3px 12px rgba(0,80,120,.07);padding:14px 18px;margin-bottom:10px;border-left:4px solid transparent;}
+.tt-day.today{border-left-color:var(--blue);}
+.tt-day.locked{opacity:.55;}
+.tt-hdr{display:flex;justify-content:space-between;gap:10px;align-items:baseline;}
+.tt-name{font-weight:700;font-size:.95rem;}
+.tt-date{font-size:.75rem;color:var(--muted);white-space:nowrap;}
+.tt-body{font-size:.87rem;line-height:1.55;margin:6px 0 0;}
+.tt-done{font-size:.82rem;color:#2f6b2f;margin-top:8px;}
+.tt-late{color:var(--muted);}
+.tt-form textarea{width:100%;margin:10px 0 8px;box-sizing:border-box;}
+.tt-badge{display:inline-block;font-size:.72rem;font-weight:700;color:var(--blue);background:var(--blue-light);border-radius:6px;padding:2px 8px;margin-left:6px;}
+@media (max-width:480px){.tt-stat b{font-size:1.2rem;}}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="tt-page">
+  <div class="tt-title">App tester tasks</div>
+
+  {% if enrolment.status == 'requested' %}
+    <p class="tt-sub">Vinaka for signing up as an app tester! Our team is confirming your tester status — we'll send you a notification as soon as you're enrolled, and your first task will be waiting here.</p>
+  {% elif enrolment.status == 'declined' or enrolment.status == 'withdrawn' %}
+    <p class="tt-sub">You're not currently enrolled in the app tester tutorial. If you think this is a mistake, please <a href="{% url 'contact_support' %}">contact us</a>.</p>
+  {% else %}
+    <p class="tt-sub">
+      {% if enrolment.status == 'completed' %}You've finished all {{ total_days }} days — vinaka vakalevu for testing!
+      {% else %}Open the app every day, do that day's task, and tap <strong>Mark as done</strong>. Using the app {{ total_days }} days in a row helps us launch on Google Play.{% endif %}
+    </p>
+
+    <div class="tt-stats">
+      <div class="tt-stat"><b>{{ today_day }}/{{ total_days }}</b><span>Today is day</span></div>
+      <div class="tt-stat"><b>{{ completed_count }}</b><span>Tasks done</span></div>
+      <div class="tt-stat"><b>{{ streak }}🔥</b><span>Day streak</span></div>
+    </div>
+    <div class="tt-bar" role="progressbar" aria-valuemin="0" aria-valuemax="{{ total_days }}" aria-valuenow="{{ completed_count }}"><i style="width:{% widthratio completed_count total_days 100 %}%"></i></div>
+
+    {% for d in days %}
+    <div class="tt-day{% if d.is_today %} today{% endif %}{% if not d.unlocked %} locked{% endif %}">
+      <div class="tt-hdr">
+        <div class="tt-name">Day {{ d.task.day }}: {% if d.unlocked %}{{ d.task.title }}{% else %}Unlocks {{ d.date|date:"D j M" }}{% endif %}{% if d.is_today %}<span class="tt-badge">Today</span>{% endif %}</div>
+        <div class="tt-date">{{ d.date|date:"j M" }}</div>
+      </div>
+      {% if d.unlocked %}
+        <p class="tt-body">{{ d.task.instructions }}{% if d.task.link_path %} <a href="{{ d.task.link_path }}">Go there →</a>{% endif %}</p>
+        {% if d.completion %}
+          <div class="tt-done">✅ Done {{ d.completion.completed_at|date:"D j M, H:i" }}{% if not d.on_time %} <span class="tt-late">(completed late)</span>{% endif %}</div>
+        {% else %}
+          <form method="post" action="{% url 'tester_complete_task' d.task.day %}" class="tt-form">
+            {% csrf_token %}
+            <textarea name="feedback" rows="2" class="form-input" maxlength="2000" placeholder="Optional: anything you noticed, liked, or that didn't work?"></textarea>
+            <button type="submit" class="btn btn-primary">Mark as done</button>
+          </form>
+        {% endif %}
+      {% endif %}
+    </div>
+    {% endfor %}
+  {% endif %}
+</div>
+{% endblock %}

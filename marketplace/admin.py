@@ -142,15 +142,17 @@ class UserAdmin(BaseUserAdmin):
     list_display = ['email', 'first_name', 'last_name', 'role', 'town', 'has_photo_id', 'is_tester', 'is_market_founding_member', 'is_active', 'date_joined', 'accepted_terms_display']
     list_filter  = ['role', 'town', 'is_tester', 'is_market_founding_member', 'is_active', HasAcceptedTermsFilter]
     search_fields = ['email', 'first_name', 'last_name']
-    actions = ['grant_tester_access', 'revoke_tester_access', 'migrate_to_local_pro']
+    actions = ['grant_tester_access', 'revoke_tester_access', 'show_app_tester_welcome',
+               'enrol_app_tester', 'migrate_to_local_pro']
     readonly_fields = ['account_deleted_at', 'photo_id_link']
     inlines = [SocialAccountInline]
     fieldsets = (
         (None,           {'fields': ('email', 'password')}),
         ('Personal',     {'fields': ('first_name', 'last_name', 'mobile', 'town', 'role')}),
         ('Identity',     {'fields': ('photo_id', 'photo_id_link'), 'description': 'Required at signup for every account type. Accounts created before photo ID was required may have none.'}),
-        ('Beta Access',  {'fields': ('is_tester',), 'description': 'Testers can preview features gated behind an unlaunched-feature flag (e.g. supplier accounts) before general availability.'}),
+        ('Beta Access',  {'fields': ('is_tester', 'show_tester_welcome'), 'description': 'Beta testers can preview features gated behind an unlaunched-feature flag (e.g. supplier accounts) before general availability. "Show app tester welcome bubble" asks this user "Are you an app tester?" on their next visit; it switches itself off once they answer.'}),
         ('Market Founding Seller', {'fields': ('is_market_founding_member', 'market_founding_credit_balance')}),
+        ('App Tester Reward', {'fields': ('tester_fee_credit_balance',), 'description': 'Given automatically to the first testers to finish the 14-day tutorial; spent down against job and Market platform fees.'}),
         ('Permissions',  {'fields': ('is_active', 'is_staff', 'is_superuser', 'groups', 'user_permissions')}),
         ('Dates',        {'fields': ('last_login', 'date_joined')}),
         ('Account Deletion', {'fields': ('account_deleted_at',), 'description': 'Set automatically when a user deletes their own account (self-service — see views.delete_account). Never set manually.'}),
@@ -179,6 +181,18 @@ class UserAdmin(BaseUserAdmin):
     def revoke_tester_access(self, request, queryset):
         updated = queryset.update(is_tester=False)
         messages.success(request, f'Revoked tester access from {updated} user(s).')
+
+    @admin.action(description='Show app tester welcome bubble on next visit')
+    def show_app_tester_welcome(self, request, queryset):
+        updated = tester_program.show_welcome_bubble(queryset)
+        skipped = queryset.count() - updated
+        note = f' Skipped {skipped} already enrolled or finished.' if skipped else ''
+        messages.success(request, f'The app tester welcome bubble will show to {updated} user(s) on their next visit.{note}')
+
+    @admin.action(description='Enrol in 14-day app tester tutorial now (sends confirmation + Day 1 task)')
+    def enrol_app_tester(self, request, queryset):
+        enrolled = sum(1 for u in queryset if tester_program.enrol_user(u, enrolled_by=request.user))
+        messages.success(request, f'Enrolled {enrolled} user(s) in the app tester tutorial. Anyone already enrolled was left as they were.')
 
     @admin.action(description='Migrate to Local Pro (one at a time)')
     def migrate_to_local_pro(self, request, queryset):
@@ -1716,3 +1730,128 @@ class UserBlockAdmin(admin.ModelAdmin):
     search_fields = ('blocker__email', 'blocked__email')
     raw_id_fields = ('blocker', 'blocked')
 
+
+
+# ── App tester program (14-day tutorial) ─────────────────────────────────────
+
+from . import testers as tester_program  # noqa: E402
+from .models import TESTER_PROGRAM_DAYS, TESTER_REWARD_CREDIT, TesterEnrolment, TesterTask, TesterTaskCompletion  # noqa: E402
+
+
+@admin.register(TesterTask)
+class TesterTaskAdmin(admin.ModelAdmin):
+    list_display = ['day', 'title', 'link_path']
+    list_display_links = ['day', 'title']
+    ordering = ['day']
+
+
+class TesterTaskCompletionInline(admin.TabularInline):
+    model = TesterTaskCompletion
+    extra = 0
+    can_delete = False
+    fields = ['task', 'completed_at', 'on_time', 'feedback']
+    readonly_fields = ['task', 'completed_at', 'on_time', 'feedback']
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+    @admin.display(boolean=True, description='On the day')
+    def on_time(self, obj):
+        return timezone.localdate(obj.completed_at) == obj.enrolment.date_for_day(obj.task.day)
+
+
+@admin.register(TesterEnrolment)
+class TesterEnrolmentAdmin(admin.ModelAdmin):
+    """The "tutorial" section: confirm testers who ticked "I'm an app
+    tester" at signup (or add a user directly), then track their 14 days.
+    Enrolling — via the action, or by saving with status "Enrolled" — starts
+    the tutorial today and sends the confirmation and Day 1's task."""
+    list_display = ['user', 'user_email', 'status', 'source', 'requested_at', 'start_date',
+                    'day_display', 'completed_display', 'on_time_display', 'streak_display', 'rewarded']
+    list_filter = ['status', 'source']
+    search_fields = ['user__email', 'user__first_name', 'user__last_name']
+    raw_id_fields = ['user']
+    list_select_related = ['user']
+    readonly_fields = ['requested_at', 'enrolled_at', 'enrolled_by', 'start_date',
+                       'last_task_notified_day', 'progress_summary', 'reward_credit_awarded_at']
+    fields = ['user', 'status', 'source', 'confirmed_play_email', 'confirmed_android_device',
+              'admin_notes', 'progress_summary', 'requested_at', 'enrolled_at', 'enrolled_by',
+              'start_date', 'last_task_notified_day', 'reward_credit_awarded_at']
+    inlines = [TesterTaskCompletionInline]
+    actions = ['enrol_testers', 'decline_testers', 'restart_testers']
+
+    @admin.display(boolean=True, description=f'Got ${TESTER_REWARD_CREDIT:,.0f} credit')
+    def rewarded(self, obj):
+        return bool(obj.reward_credit_awarded_at)
+
+    @admin.display(description='Email', ordering='user__email')
+    def user_email(self, obj):
+        return obj.user.email
+
+    @admin.display(description='Day')
+    def day_display(self, obj):
+        return f'{obj.current_day()}/{TESTER_PROGRAM_DAYS}' if obj.start_date else '—'
+
+    @admin.display(description='Done')
+    def completed_display(self, obj):
+        return f'{obj.completions.count()}/{TESTER_PROGRAM_DAYS}'
+
+    @admin.display(description='On the day')
+    def on_time_display(self, obj):
+        return len(obj.on_time_days())
+
+    @admin.display(description='Streak')
+    def streak_display(self, obj):
+        return obj.streak() if obj.start_date else '—'
+
+    @admin.display(description='Progress')
+    def progress_summary(self, obj):
+        if not obj.pk or not obj.start_date:
+            return 'Not started — enrol this tester to start the 14-day tutorial.'
+        done = obj.completed_days()
+        on_time = obj.on_time_days()
+        today = obj.current_day()
+        cells = []
+        for day in range(1, TESTER_PROGRAM_DAYS + 1):
+            if day in on_time:
+                mark, title = '✅', 'done on the day'
+            elif day in done:
+                mark, title = '☑️', 'done late'
+            elif day < today:
+                mark, title = '❌', 'missed'
+            elif day == today:
+                mark, title = '⏳', 'today'
+            else:
+                mark, title = '·', 'not yet'
+            cells.append(format_html('<span title="Day {}: {}" style="display:inline-block;width:2.2em;text-align:center;">{}<br><small>{}</small></span>', day, title, mark, day))
+        from django.utils.safestring import mark_safe
+        return mark_safe(''.join(cells))  # each cell is already escaped by format_html
+
+    def save_model(self, request, obj, form, change):
+        """Saving with status "Enrolled" (new or changed) runs the real
+        enrolment so the tester is notified and Day 1 is sent."""
+        becoming_enrolled = obj.status == TesterEnrolment.STATUS_ENROLLED and (
+            not change or form.initial.get('status') != TesterEnrolment.STATUS_ENROLLED
+        )
+        if becoming_enrolled:
+            # enrol() sets the status itself (and starts Day 1 today).
+            obj.status = TesterEnrolment.STATUS_REQUESTED
+        super().save_model(request, obj, form, change)
+        if becoming_enrolled:
+            tester_program.enrol(obj, enrolled_by=request.user)
+            messages.success(request, f'{obj.user} is enrolled — confirmation and Day 1 task sent.')
+
+    @admin.action(description='Enrol in 14-day tutorial (sends confirmation + Day 1 task)')
+    def enrol_testers(self, request, queryset):
+        enrolled = sum(1 for e in queryset.select_related('user') if tester_program.enrol(e, enrolled_by=request.user))
+        messages.success(request, f'Enrolled {enrolled} tester(s). Already-enrolled testers were left as they were.')
+
+    @admin.action(description='Restart from Day 1 today (clears progress, for testing)')
+    def restart_testers(self, request, queryset):
+        restarted = sum(1 for e in queryset.select_related('user') if tester_program.restart(e, enrolled_by=request.user))
+        messages.success(request, f'Restarted {restarted} tester(s) from Day 1.')
+
+    @admin.action(description='Decline app tester status')
+    def decline_testers(self, request, queryset):
+        updated = queryset.filter(status=TesterEnrolment.STATUS_REQUESTED).update(status=TesterEnrolment.STATUS_DECLINED)
+        messages.success(request, f'Declined {updated} request(s).')
