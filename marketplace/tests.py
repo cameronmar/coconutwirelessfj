@@ -4755,7 +4755,7 @@ class PhotoIdRequirementTests(TestCase):
         self.assertFalse(user.photo_id)
 
 
-@override_settings(ADMIN_EMAIL='admin@example.com')
+@override_settings(ADMIN_EMAIL='admin@example.com', STORAGES=IN_MEMORY_STORAGES)
 class AppTesterProgramTests(TestCase):
     """14-day app tester tutorial: signup opt-in -> admin confirmation email ->
     admin enrols -> enrolment + daily task notices -> tester marks tasks done."""
